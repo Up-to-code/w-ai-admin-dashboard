@@ -803,7 +803,10 @@ export async function resolveMutation(ref: any, args?: any): Promise<any> {
   const path = getPath(ref);
 
   switch (path) {
-    case "auth.login":
+    case "auth.login": {
+      const u = users[0];
+      return { userId: u._id, role: u.role };
+    }
     case "auth.register":
       return users[0]._id;
 

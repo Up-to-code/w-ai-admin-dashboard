@@ -8,6 +8,9 @@ import {
   useCallback,
   ReactNode,
 } from "react"
+import { useQuery } from "convex/react"
+import { api } from "@/mock/convex-api"
+import type { Id } from "@/mock/dataModel"
 import type { UserRole } from "@/lib/auth-storage"
 import { authStorage } from "@/lib/auth-storage"
 
@@ -25,60 +28,58 @@ type AuthContextType = {
 const AuthContext = createContext<AuthContextType | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null)
-  const [userId, setUserIdState] = useState<string | null>(null)
-  const [role, setRoleState] = useState<UserRole | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [userId, setUserIdState] = useState<string | null>(() => authStorage.getUserId())
+  const storedUserId = userId ?? authStorage.getUserId()
 
+  const dbUser = useQuery(
+    api.auth.getUser,
+    storedUserId ? { userId: storedUserId as Id<"users"> } : "skip"
+  )
+
+  const role: UserRole | null =
+    dbUser !== undefined && dbUser !== null ? (dbUser.role as UserRole) : null
+  const isAuthenticated =
+    storedUserId !== null &&
+    (dbUser === undefined ? !!authStorage.getAuthToken() : dbUser !== null)
+  const loading = !!storedUserId && dbUser === undefined
   const isAdmin = role === "admin"
 
   useEffect(() => {
-    const storedToken = authStorage.getAuthToken()
-    const storedUserId = authStorage.getUserId()
-    const storedRole = authStorage.getUserRole()
-
-    if (storedToken && storedUserId) {
-      setIsAuthenticated(true)
-      setUserIdState(storedUserId)
-      setRoleState(storedRole ?? "user")
-    } else {
-      setIsAuthenticated(false)
+    if (!storedUserId) {
       setUserIdState(null)
-      setRoleState(null)
+      return
     }
+    setUserIdState(storedUserId)
+    if (dbUser === null) {
+      authStorage.clearAuth()
+      setUserIdState(null)
+    } else if (dbUser && dbUser.role) {
+      authStorage.setUserRole(dbUser.role as UserRole)
+    }
+  }, [storedUserId, dbUser])
 
-    setLoading(false)
+  const login = useCallback((token: string, id: string, userRole: UserRole = "user") => {
+    authStorage.setAuthToken(token)
+    authStorage.setUserId(id)
+    authStorage.setUserRole(userRole)
+    setUserIdState(id)
   }, [])
-
-  const login = useCallback(
-    (token: string, id: string, userRole: UserRole = "admin") => {
-      authStorage.setAuthToken(token)
-      authStorage.setUserId(id)
-      authStorage.setUserRole(userRole)
-      setIsAuthenticated(true)
-      setUserIdState(id)
-      setRoleState(userRole)
-    },
-    []
-  )
 
   const setRole = useCallback((newRole: UserRole) => {
     authStorage.setUserRole(newRole)
-    setRoleState(newRole)
+    // Role is sourced from DB; this updates cache only. Query will refetch.
   }, [])
 
   const logout = useCallback(() => {
     authStorage.clearAuth()
-    setIsAuthenticated(false)
     setUserIdState(null)
-    setRoleState(null)
   }, [])
 
   return (
     <AuthContext.Provider
       value={{
         isAuthenticated,
-        userId,
+        userId: isAuthenticated ? storedUserId : null,
         role,
         isAdmin,
         loading,

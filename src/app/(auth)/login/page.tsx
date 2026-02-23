@@ -3,7 +3,7 @@
 import { useState, Suspense } from "react"
 import { useMutation } from "convex/react"
 import { api } from "@/mock/convex-api"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -20,6 +20,8 @@ function LoginForm() {
   const loginMutation = useMutation(api.auth.login)
   const { login } = useAuth()
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const redirectTo = searchParams.get("redirect") || "/"
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -32,12 +34,18 @@ function LoginForm() {
         throw new Error("يرجى ملء جميع الحقول")
       }
 
-      const userId = await loginMutation({ email: normalizedEmail, password })
-      if (userId) {
-        const id = String(userId)
-        login(id, id)
+      const result = await loginMutation({ email: normalizedEmail, password })
+      if (result) {
+        // Support both { userId, role } and legacy userId string
+        const id = typeof result === "object" && result !== null && "userId" in result
+          ? String(result.userId)
+          : String(result)
+        const role = typeof result === "object" && result !== null && "role" in result
+          ? (result.role as "admin" | "agent" | "user")
+          : "user"
+        login(id, id, role)
         // Defer redirect so auth state and storage are committed before navigation
-        setTimeout(() => router.push("/"), 0)
+        setTimeout(() => router.push(redirectTo), 0)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "فشل تسجيل الدخول")

@@ -145,8 +145,8 @@ export const login = mutation({
       throw new Error("كلمة المرور غير صحيحة");
     }
 
-    authDebug("[Auth] login success", { userId: user._id });
-    return user._id;
+    authDebug("[Auth] login success", { userId: user._id, role: user.role });
+    return { userId: user._id, role: user.role };
   },
 });
 
