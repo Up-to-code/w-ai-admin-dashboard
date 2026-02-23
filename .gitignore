@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build
+.next/
+out/
+
+# Env (secrets - use .env.example as template)
+.env
+.env.local
+.env*.local
+
+# IDE
+.vercel
+*.tsbuildinfo
+
+# Misc
+.DS_Store
