@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 import path from "path";
 
 const nextConfig: NextConfig = {
+  turbopack: {},
   webpack: (config) => {
     // Fix tailwindcss resolution: ensure modules resolve from project root
     // (avoids "Can't resolve 'tailwindcss'" when webpack uses wrong context)
