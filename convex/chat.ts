@@ -513,7 +513,7 @@ export const sendMessage = mutation({
         templateName: args.template!.name,
         phoneNumberId: chat.phoneNumberId ?? undefined,
         requestedLanguage,
-        allowFallback: false,
+        allowFallback: true,
         requireScoped: true,
       });
 
@@ -682,7 +682,7 @@ export const buildAndSendCarouselTemplate = internalAction({
         templateName: args.templateName,
         phoneNumberId: args.phoneNumberId,
         requestedLanguage: args.language,
-        allowFallback: false,
+        allowFallback: true,
         requireScoped: true,
       });
       if (!resolved.ok) {

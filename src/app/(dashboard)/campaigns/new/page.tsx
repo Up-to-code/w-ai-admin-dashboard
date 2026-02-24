@@ -128,7 +128,7 @@ export default function NewCampaignPage() {
 
     const uniqueTags = Array.from(new Set(contacts?.flatMap((c: any) => c.tags || []) || []))
     const normalizedTestPhones = testContactPhones
-        .map((phone) => phone.replace(/[^\d+]/g, ""))
+        .map((phone) => phone.replace(/\D/g, ""))
         .filter((phone) => phone.length > 0)
     const testBypassValidationError =
         isTestCampaign && testBypassRecentContact && normalizedTestPhones.length === 0
@@ -428,7 +428,7 @@ export default function NewCampaignPage() {
     ]
 
     const addTestPhone = () => {
-        const normalized = testPhoneInput.replace(/[^\d+]/g, "")
+        const normalized = testPhoneInput.replace(/\D/g, "")
         if (!normalized) return
         if (testContactPhones.includes(normalized)) {
             setTestPhoneInput("")

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildIdentityLockPrompt } from "./agent";
+import { buildIdentityLockPrompt } from "./agentIdentityLock";
 
 describe("buildIdentityLockPrompt", () => {
   it("includes strict business lock with provided business data", () => {
@@ -21,4 +21,3 @@ describe("buildIdentityLockPrompt", () => {
     expect(prompt).toContain("unknown");
   });
 });
-

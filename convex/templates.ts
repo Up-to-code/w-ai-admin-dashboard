@@ -1,10 +1,10 @@
 import { query, mutation, action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
-
-function normalizeLanguageCode(lang: string | undefined): string {
-  return (lang || "").trim().toLowerCase().replace("-", "_");
-}
+import {
+  normalizeTemplateLanguageCode as normalizeLanguageCode,
+  resolveScopedTemplateCandidate,
+} from "./templateResolution";
 
 function extractLanguageCode(value: any): string | null {
   if (typeof value === "string") {
@@ -212,36 +212,9 @@ export const resolveTemplateForSend = internalQuery({
       )
       .collect();
     const scopedApproved = scopedByName.filter((t) => t.status === "APPROVED");
-
-    if (!requestedLanguage) {
-      attempted.push({
-        step: "scoped_exact",
-        matched: false,
-        note: "requestedLanguage missing",
-      });
-      attempted.push({
-        step: "scoped_same_name_any_lang",
-        matched: false,
-        note: allowFallback
-          ? "scoped fallback disabled for strict scope policy"
-          : "fallback disabled",
-      });
-      attempted.push({
-        step: "global_exact",
-        matched: false,
-        note: requireScoped ? "requireScoped enabled" : "global fallback disabled by policy",
-      });
-      return {
-        ok: false as const,
-        reasonCode: "LANGUAGE_MISSING",
-        message: `Template "${args.templateName}" cannot be resolved because requested language is missing.`,
-        attempted,
-      };
-    }
-
-    const scopedExact = scopedApproved.find(
-      (t) => normalizeLanguageCode(t.language) === requestedLanguage
-    );
+    const scopedExact = requestedLanguage
+      ? scopedApproved.find((t) => normalizeLanguageCode(t.language) === requestedLanguage)
+      : null;
     attempted.push({
       step: "scoped_exact",
       matched: !!scopedExact,
@@ -259,6 +232,53 @@ export const resolveTemplateForSend = internalQuery({
         resolutionMode: "scoped_exact" as const,
         attempted,
       };
+    }
+
+    const scopedSelection = resolveScopedTemplateCandidate(
+      scopedApproved.map((template) => ({
+        _id: String(template._id),
+        name: template.name,
+        language: template.language,
+        phoneNumberId: template.phoneNumberId ?? null,
+        status: template.status,
+        lastSyncedAt: template.lastSyncedAt ?? null,
+        _creationTime: template._creationTime,
+      })),
+      requestedLanguage || undefined,
+      allowFallback
+    );
+
+    const familyAttempted = !!requestedLanguage && allowFallback;
+    attempted.push({
+      step: "scoped_language_family",
+      matched: scopedSelection.mode === "scoped_language_family",
+      note: familyAttempted ? undefined : "fallback disabled or language missing",
+    });
+
+    attempted.push({
+      step: "scoped_latest",
+      matched: scopedSelection.mode === "scoped_latest",
+      note: allowFallback ? `candidates=${scopedApproved.length}` : "fallback disabled",
+    });
+
+    if (scopedSelection.selected && scopedSelection.mode) {
+      const resolvedId = scopedSelection.selected._id as any;
+      const selectedTemplate = scopedApproved.find(
+        (template) => String(template._id) === String(resolvedId)
+      );
+      if (selectedTemplate) {
+        return {
+          ok: true as const,
+          selected: {
+            templateId: selectedTemplate._id,
+            name: selectedTemplate.name,
+            language: selectedTemplate.language,
+            phoneNumberId: selectedTemplate.phoneNumberId ?? null,
+          },
+          resolutionMode: scopedSelection.mode,
+          attempted,
+        };
+      }
     }
 
     const hasAnyScopedByName = scopedByName.length > 0;
@@ -280,22 +300,18 @@ export const resolveTemplateForSend = internalQuery({
       };
     }
     attempted.push({
-      step: "scoped_same_name_any_lang",
-      matched: false,
-      note: allowFallback
-        ? "scoped fallback disabled for strict scope policy"
-        : "fallback disabled",
-    });
-    attempted.push({
       step: "global_exact",
       matched: false,
       note: requireScoped ? "requireScoped enabled" : "global fallback disabled by policy",
     });
 
+    const reasonCode = !requestedLanguage ? "LANGUAGE_MISSING" : "LANGUAGE_MISMATCH";
     return {
       ok: false as const,
-      reasonCode: "LANGUAGE_MISMATCH",
-      message: `Template "${args.templateName}" is not available in requested language "${requestedLanguage}" for this number.`,
+      reasonCode,
+      message: !requestedLanguage
+        ? `Template "${args.templateName}" cannot be resolved because requested language is missing.`
+        : `Template "${args.templateName}" is not available in requested language "${requestedLanguage}" for this number.`,
       attempted,
     };
   },

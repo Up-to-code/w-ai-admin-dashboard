@@ -5,14 +5,12 @@ import type { Id } from "./_generated/dataModel";
 import { retrier, crons } from "./index";
 import { categorizeWhatsAppError } from "./errorUtils";
 import { logDebug, logWarn, logError } from "./logging";
+import { normalizePhoneForComparison } from "./phoneNormalization";
+import { isBypassedTestContact, normalizeTestContactPhones } from "./campaignTestContacts";
 
 const INVALID_TEMPLATE_PRECHECK_PREFIX = "[INVALID_TEMPLATE_PRECHECK]";
 const DEFAULT_INVALID_TEMPLATE_NAMES = ["tasees_day2"];
 const MAX_TEST_CONTACT_PHONES = 5;
-
-function normalizePhone(raw: string | null | undefined): string {
-    return String(raw ?? "").replace(/[^\d+]/g, "");
-}
 
 // Shared args validator - single source of truth for campaign creation (includes test campaign fields)
 const createCampaignArgs = {
@@ -62,9 +60,7 @@ export const createCampaignInternal = internalMutation({
         }
         const isTestCampaign = args.isTestCampaign ?? false;
         const testBypassRecentContact = args.testBypassRecentContact ?? false;
-        const testContactPhones = (args.testContactPhones ?? [])
-            .map((phone) => normalizePhone(phone))
-            .filter((phone) => phone.length > 0);
+        const testContactPhones = normalizeTestContactPhones(args.testContactPhones);
 
         if (!isTestCampaign && (testBypassRecentContact || testContactPhones.length > 0)) {
             throw new Error("Test bypass settings are only allowed when test campaign mode is enabled.");
@@ -76,27 +72,26 @@ export const createCampaignInternal = internalMutation({
             throw new Error(`Test contact phones cannot exceed ${MAX_TEST_CONTACT_PHONES}.`);
         }
 
-        if (args.phoneNumberId) {
-            const template = await ctx.db.get(args.templateId);
-            if (!template) {
-                throw new Error("Template not found. Please select a valid template.");
-            }
-            if (template.phoneNumberId !== args.phoneNumberId) {
-                throw new Error(
-                    `Template "${args.templateName}" is not available for the selected number. ` +
-                    "Please select a template synced for this number, or change the sending number."
-                );
-            }
-            if (template.status !== "APPROVED") {
-                throw new Error(`Template "${args.templateName}" is not approved for sending.`);
-            }
+        const template = await ctx.db.get(args.templateId);
+        if (!template) {
+            throw new Error("Template not found. Please select a valid template.");
         }
+        if (template.phoneNumberId !== args.phoneNumberId) {
+            throw new Error(
+                `Template "${args.templateName}" is not available for the selected number. ` +
+                "Please select a template synced for this number, or change the sending number."
+            );
+        }
+        if (template.status !== "APPROVED") {
+            throw new Error(`Template "${args.templateName}" is not approved for sending.`);
+        }
+        const resolvedTemplateLanguage = args.templateLanguage ?? template.language ?? undefined;
 
         const id = await ctx.db.insert("campaigns", {
             name: args.name,
             templateId: args.templateId,
             templateName: args.templateName,
-            templateLanguage: args.templateLanguage,
+            templateLanguage: resolvedTemplateLanguage,
             phoneNumberId: args.phoneNumberId,
             isTestCampaign,
             testBypassRecentContact,
@@ -222,7 +217,7 @@ export const validateTemplateSelection = query({
             templateName: args.templateName,
             phoneNumberId: args.phoneNumberId,
             requestedLanguage: args.requestedLanguage,
-            allowFallback: false,
+            allowFallback: true,
             requireScoped: true,
         });
         if (!resolved.ok) {
@@ -458,7 +453,7 @@ export const startProcessing = internalAction({
             templateName: campaign.templateName,
             phoneNumberId: campaign.phoneNumberId,
             requestedLanguage,
-            allowFallback: false,
+            allowFallback: true,
             requireScoped: true,
             failOnSyncError: true,
         });
@@ -591,7 +586,7 @@ export const processBatch = internalAction({
                     templateName: campaign.templateName,
                     phoneNumberId: campaign.phoneNumberId,
                     requestedLanguage: requestedLanguageForSyncCheck,
-                    allowFallback: false,
+                    allowFallback: true,
                     requireScoped: true,
                 });
                 if (!fallbackResolution?.ok) {
@@ -742,18 +737,20 @@ export const sendToContact = internalAction({
 
         if (config.skipRecentlyContacted && contact.lastMessagedAt) {
             const campaignAllowsBypass = campaign.isTestCampaign && campaign.testBypassRecentContact;
-            const normalizedContactPhone = normalizePhone(contact.phone);
-            const isBypassedTestContact = campaignAllowsBypass &&
-                Array.isArray(campaign.testContactPhones) &&
-                campaign.testContactPhones.some((phone: string) => normalizePhone(phone) === normalizedContactPhone);
-            if (isBypassedTestContact) {
+            const normalizedContactPhone = normalizePhoneForComparison(contact.phone);
+            const bypassedForContact = isBypassedTestContact(
+                campaignAllowsBypass,
+                Array.isArray(campaign.testContactPhones) ? campaign.testContactPhones : [],
+                contact.phone
+            );
+            if (bypassedForContact) {
                 logDebug("[Campaign] Test bypass applied for recently contacted check", {
                     campaignId: args.campaignId,
                     contactId: args.contactId,
                     phone: normalizedContactPhone,
                 });
             }
-            if (isBypassedTestContact) {
+            if (bypassedForContact) {
                 // Proceed with send for explicitly allowed test contacts.
             } else {
                 const recentThreshold = Date.now() - (config.recentContactHours * 60 * 60 * 1000);
@@ -796,7 +793,7 @@ export const sendToContact = internalAction({
             templateName: campaign.templateName,
             phoneNumberId: campaign.phoneNumberId,
             requestedLanguage,
-            allowFallback: false,
+            allowFallback: true,
             requireScoped: true,
         });
         if (!resolved.ok) {
@@ -886,7 +883,7 @@ export const sendToContact = internalAction({
                     templateName: campaign.templateName,
                     phoneNumberId: campaign.phoneNumberId,
                     requestedLanguage: retryRequestedLanguage,
-                    allowFallback: false,
+                    allowFallback: true,
                     requireScoped: true,
                 });
                 if (!newResolved.ok || (newResolved.selected.templateId === resolved.selected.templateId && newResolved.selected.language === resolved.selected.language)) {
@@ -2260,7 +2257,7 @@ export const getContactSendHistory = query({
         limit: v.optional(v.number()),
     },
     handler: async (ctx, args) => {
-        const normalizedPhone = normalizePhone(args.phone);
+        const normalizedPhone = normalizePhoneForComparison(args.phone);
         const maxRows = Math.min(Math.max(args.limit ?? 20, 1), 100);
         const contact = await ctx.db
             .query("contacts")

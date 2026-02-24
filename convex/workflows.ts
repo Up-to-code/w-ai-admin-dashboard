@@ -154,7 +154,7 @@ async function executeWorkflowAction(ctx: any, workflow: any, contactPhone: stri
                     templateName,
                     phoneNumberId: scopedPhoneNumberId,
                     requestedLanguage,
-                    allowFallback: false,
+                    allowFallback: true,
                     requireScoped: true,
                 });
                 if (!resolved.ok) {

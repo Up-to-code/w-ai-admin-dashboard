@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeRuntimeEventInput } from "./mobileRuntimeEvents";
+import { normalizeRuntimeEventInput } from "./mobileRuntimeEventsUtils";
 
 describe("normalizeRuntimeEventInput", () => {
   it("applies defaults for missing fields", () => {
