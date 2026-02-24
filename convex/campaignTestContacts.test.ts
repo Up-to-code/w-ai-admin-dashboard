@@ -5,9 +5,8 @@ import {
 } from "./campaignTestContacts";
 
 describe("campaign test contacts", () => {
-  it("normalizes test phones for campaign creation", () => {
+  it("normalizes and deduplicates test phones for campaign creation", () => {
     expect(normalizeTestContactPhones(["+201015638178", "201015638178"])).toEqual([
-      "201015638178",
       "201015638178",
     ]);
   });
@@ -28,5 +27,14 @@ describe("campaign test contacts", () => {
     expect(
       isBypassedTestContact(true, ["201015638178"], "201011111111")
     ).toBe(false);
+  });
+
+  it("matches local and country-code variants for the same phone", () => {
+    expect(
+      isBypassedTestContact(true, ["201015638178"], "01015638178")
+    ).toBe(true);
+    expect(
+      isBypassedTestContact(true, ["01015638178"], "+201015638178")
+    ).toBe(true);
   });
 });

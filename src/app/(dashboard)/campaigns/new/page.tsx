@@ -61,6 +61,8 @@ type ScopedTemplateCandidate = {
     _creationTime?: number
 }
 
+const DEFAULT_TEST_PHONE = "201015638178"
+
 function normalizeTemplateLanguageCode(value: string | null | undefined): string {
     return String(value ?? "").trim().toLowerCase().replace("-", "_")
 }
@@ -81,6 +83,26 @@ function pickLatestTemplate(templates: ScopedTemplateCandidate[]): ScopedTemplat
 
 function isMissingFunctionError(message: string): boolean {
     return message.includes("Could not find public function")
+}
+
+function toAsciiDigits(value: string): string {
+    return value
+        .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 1632))
+        .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 1776))
+}
+
+function normalizeCampaignTestPhone(raw: string | null | undefined): string {
+    return toAsciiDigits(String(raw ?? "")).replace(/\D/g, "")
+}
+
+function normalizeCampaignTestPhoneList(phones: string[] | null | undefined): string[] {
+    return Array.from(
+        new Set(
+            (phones ?? [])
+                .map((phone) => normalizeCampaignTestPhone(phone))
+                .filter((phone) => phone.length > 0)
+        )
+    )
 }
 
 function mapResultReasonToArabic(reason: string): string {
@@ -227,9 +249,7 @@ export default function NewCampaignPage() {
     }) || []
 
     const uniqueTags = Array.from(new Set(contacts?.flatMap((c: any) => c.tags || []) || []))
-    const normalizedTestPhones = testContactPhones
-        .map((phone) => phone.replace(/\D/g, ""))
-        .filter((phone) => phone.length > 0)
+    const normalizedTestPhones = normalizeCampaignTestPhoneList(testContactPhones)
     const testBypassValidationError =
         isTestCampaign && testBypassRecentContact && normalizedTestPhones.length === 0
             ? "أضف رقم اختبار واحد على الأقل لتفعيل التجاوز."
@@ -798,13 +818,13 @@ export default function NewCampaignPage() {
     ]
 
     const addTestPhone = () => {
-        const normalized = testPhoneInput.replace(/\D/g, "")
+        const normalized = normalizeCampaignTestPhone(testPhoneInput)
         if (!normalized) return
-        if (testContactPhones.includes(normalized)) {
+        if (normalizedTestPhones.includes(normalized)) {
             setTestPhoneInput("")
             return
         }
-        setTestContactPhones((prev) => [...prev, normalized])
+        setTestContactPhones((prev) => normalizeCampaignTestPhoneList([...prev, normalized]))
         setTestPhoneInput("")
     }
 
@@ -1124,7 +1144,17 @@ export default function NewCampaignPage() {
                                                     </div>
                                                     <Switch
                                                         checked={isTestCampaign}
-                                                        onCheckedChange={setIsTestCampaign}
+                                                        onCheckedChange={(checked) => {
+                                                            setIsTestCampaign(checked)
+                                                            if (checked) {
+                                                                setTestBypassRecentContact(true)
+                                                                setTestContactPhones((prev) =>
+                                                                    normalizeCampaignTestPhoneList(
+                                                                        prev.length > 0 ? prev : [DEFAULT_TEST_PHONE]
+                                                                    )
+                                                                )
+                                                            }
+                                                        }}
                                                     />
                                                 </div>
 
@@ -1139,8 +1169,8 @@ export default function NewCampaignPage() {
                                                                 checked={testBypassRecentContact}
                                                                 onCheckedChange={(checked) => {
                                                                     setTestBypassRecentContact(checked)
-                                                                    if (checked && testContactPhones.length === 0) {
-                                                                        setTestContactPhones(["201015638178"])
+                                                                    if (checked && normalizedTestPhones.length === 0) {
+                                                                        setTestContactPhones([DEFAULT_TEST_PHONE])
                                                                     }
                                                                 }}
                                                             />
