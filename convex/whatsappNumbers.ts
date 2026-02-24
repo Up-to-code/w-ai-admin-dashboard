@@ -406,6 +406,9 @@ async function withAppSecretProof(
   url: URL,
   accessToken: string
 ): Promise<URL> {
+  if ((process.env.WHATSAPP_DISABLE_APPSECRET_PROOF ?? "").trim() === "1") {
+    return url;
+  }
   const appSecret = process.env.WHATSAPP_APP_SECRET?.trim();
   if (!appSecret) return url;
   const proof = (await ctx.runAction(internal.nodeUtils.createAppSecretProof, {
@@ -616,6 +619,8 @@ export const checkHealth = action({
     const expectedAppId = normalizeNumericId(expectedAppIdRaw);
     const graphUrl = "https://graph.facebook.com/v21.0";
     const appSecret = process.env.WHATSAPP_APP_SECRET;
+    const disableAppSecretProof =
+      (process.env.WHATSAPP_DISABLE_APPSECRET_PROOF ?? "").trim() === "1";
 
     const results: Array<{
       businessNumberId: string;
@@ -635,7 +640,7 @@ export const checkHealth = action({
       let mediaEndpointReadable = false;
       const issues: string[] = [];
       const appSecretProof =
-        appSecret && token
+        !disableAppSecretProof && appSecret && token
           ? await ctx.runAction(internal.nodeUtils.createAppSecretProof, { accessToken: token, appSecret })
           : undefined;
 

@@ -138,6 +138,12 @@ function mapTemplateSyncErrorToArabic(message: string): string {
     return value
 }
 
+type TemplateSyncAttemptResult = {
+    ok: boolean
+    unavailable: boolean
+    message?: string
+}
+
 export default function NewCampaignPage() {
     const enableExtendedCampaignApis = process.env.NEXT_PUBLIC_EXTENDED_CAMPAIGN_APIS === "1"
     const router = useRouter()
@@ -274,6 +280,25 @@ export default function NewCampaignPage() {
                   !isTemplateValidationLoading &&
                   !!templateValidation?.ok)
 
+    const syncTemplatesForPhoneNumber = useCallback(async (phoneNumberId: string): Promise<TemplateSyncAttemptResult> => {
+        const fallbackResult = await runConvexActionSafe(
+            syncTemplatesForNumber as any,
+            { phoneNumberId },
+            { actionName: "templates:syncFromMeta" }
+        )
+        if (!fallbackResult.ok) {
+            return {
+                ok: false,
+                unavailable: fallbackResult.unavailable,
+                message: fallbackResult.unavailable
+                    ? "دالة مزامنة القوالب غير متاحة على نسخة Convex الحالية. قم بنشر backend ثم أعد المحاولة."
+                    : mapTemplateSyncErrorToArabic(fallbackResult.message || "تعذر مزامنة القوالب."),
+            }
+        }
+        markScopedTemplatesSynced(phoneNumberId)
+        return { ok: true, unavailable: false }
+    }, [syncTemplatesForNumber])
+
     const triggerScopedTemplateSync = useCallback(async (force: boolean = false) => {
         if (!selectedPhoneNumberId) return
         if (isTemplateReadinessHardBlocked) {
@@ -289,21 +314,14 @@ export default function NewCampaignPage() {
         setTemplateSyncError(null)
         setTemplateSyncWarning(null)
         try {
-            const fallbackResult = await runConvexActionSafe(syncTemplatesForNumber as any, {
-                phoneNumberId: selectedPhoneNumberId,
-            }, { actionName: "templates:syncFromMeta" })
-            if (!fallbackResult.ok) {
-                setTemplateSyncError(
-                    fallbackResult.unavailable
-                        ? "دالة مزامنة القوالب غير متاحة على نسخة Convex الحالية. قم بنشر backend ثم أعد المحاولة."
-                        : mapTemplateSyncErrorToArabic(fallbackResult.message || "تعذر مزامنة القوالب.")
-                )
+            const syncResult = await syncTemplatesForPhoneNumber(selectedPhoneNumberId)
+            if (!syncResult.ok) {
+                setTemplateSyncError(syncResult.message ?? "تعذر مزامنة القوالب.")
                 return
             }
             if (enableExtendedCampaignApis) {
                 setTemplateSyncWarning("تمت مزامنة القوالب عبر المسار المتوافق مع هذه النسخة.")
             }
-            markScopedTemplatesSynced(selectedPhoneNumberId)
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
             setTemplateSyncError(mapTemplateSyncErrorToArabic(message || "تعذر مزامنة القوالب."))
@@ -316,7 +334,7 @@ export default function NewCampaignPage() {
         selectedPhoneNumberId,
         isTemplateReadinessHardBlocked,
         readinessBlockingMessage,
-        syncTemplatesForNumber,
+        syncTemplatesForPhoneNumber,
     ])
 
     useEffect(() => {
@@ -500,6 +518,7 @@ export default function NewCampaignPage() {
             const includeTestFields = isTestCampaign && !optionalExtendedApisUnavailable
             const downgradeTestMode = isTestCampaign && !includeTestFields
             const results: CampaignCreateResultRow[] = []
+            const syncWarnings: string[] = []
 
             for (const phoneNumberId of targetPhoneNumberIds) {
                 if (!numberById.has(phoneNumberId)) {
@@ -557,6 +576,18 @@ export default function NewCampaignPage() {
                     if (!isMissingFunctionError(message)) {
                         console.warn("[CampaignCreate] getSendReadiness failed", { phoneNumberId, message })
                     }
+                }
+
+                // Always attempt a fresh per-number template sync before resolving.
+                // If sync fails, keep going with cached templates to avoid all-or-nothing failures.
+                try {
+                    const syncResult = await syncTemplatesForPhoneNumber(phoneNumberId)
+                    if (!syncResult.ok && syncResult.message) {
+                        syncWarnings.push(`${phoneNumberId}: ${syncResult.message}`)
+                    }
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error)
+                    syncWarnings.push(`${phoneNumberId}: ${mapTemplateSyncErrorToArabic(message)}`)
                 }
 
                 let resolvedTemplate: ScopedTemplateCandidate | null = null
@@ -719,6 +750,12 @@ export default function NewCampaignPage() {
             if (downgradedCount > 0) {
                 toast.warning(
                     `تم إنشاء الحملات كحملات عادية بدون إعدادات الاختبار المتقدمة لعدد ${downgradedCount} رقم بسبب عدم توفر الواجهات الاختيارية.`
+                )
+            }
+
+            if (syncWarnings.length > 0) {
+                toast.warning(
+                    `تمت محاولة مزامنة القوالب لكل رقم، لكن فشلت المزامنة لبعض الأرقام (${syncWarnings.length}). سيتم استخدام القوالب المحلية المتاحة عند الإمكان.`
                 )
             }
 
@@ -1323,7 +1360,7 @@ export default function NewCampaignPage() {
                                             </div>
                                         </div>
                                         {isTemplateReadinessHardBlocked && (
-                                            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+                                            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm font-medium leading-relaxed text-destructive">
                                                 {readinessBlockingMessage}
                                                 <div className="mt-2">
                                                     <Button size="sm" variant="ghost" onClick={() => router.push("/integrations")}>
@@ -1333,34 +1370,34 @@ export default function NewCampaignPage() {
                                             </div>
                                         )}
                                         {isTemplateAuthFailed && (
-                                            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+                                            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm font-medium leading-relaxed text-destructive">
                                                 لا يمكن مزامنة أو إرسال القوالب لهذا الرقم حتى إعادة ربط Access Token من صفحة الإعدادات والربط.
                                                 {templateAuthFailedMessage ? ` (${templateAuthFailedMessage})` : ""}
                                             </div>
                                         )}
                                         {optionalExtendedApisUnavailable && (
-                                            <div className="rounded-lg border border-amber-300/50 bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-900/20 dark:text-amber-300">
+                                            <div className="rounded-lg border border-amber-300/50 bg-amber-50 p-3 text-sm leading-relaxed text-amber-900 dark:bg-amber-900/20 dark:text-amber-300">
                                                 بعض واجهات التحقق غير متاحة في نسخة Convex الحالية. يمكنك المتابعة باختيار قالب ثم النقر &quot;التالي&quot; — قد تفشل الحملة إذا كان القالب غير صالح. لتفعيل التحقق الكامل، انشر دوال الحملات/القوالب.
                                             </div>
                                         )}
                                         {templatesSource === "listFallback" && (
-                                            <div className="rounded-lg border border-amber-300/50 bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-900/20 dark:text-amber-300">
+                                            <div className="rounded-lg border border-amber-300/50 bg-amber-50 p-3 text-sm leading-relaxed text-amber-900 dark:bg-amber-900/20 dark:text-amber-300">
                                                 تستخدم هذه الصفحة مساراً توافقياً لعرض القوالب المعتمدة لأن دالة `listScopedApproved` غير متاحة في نسخة Convex الحالية.
                                             </div>
                                         )}
 
                                         {isSyncingTemplates && (
-                                            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900 dark:bg-blue-900/20 dark:text-blue-200">
+                                            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm leading-relaxed text-blue-900 dark:bg-blue-900/20 dark:text-blue-200">
                                                 جارٍ مزامنة القوالب لهذا الرقم...
                                             </div>
                                         )}
                                         {templateSyncError && (
-                                            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+                                            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm font-medium leading-relaxed text-destructive">
                                                 {templateSyncError}
                                             </div>
                                         )}
                                         {templateSyncWarning && (
-                                            <div className="rounded-lg border border-amber-300/50 bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-900/20 dark:text-amber-300">
+                                            <div className="rounded-lg border border-amber-300/50 bg-amber-50 p-3 text-sm leading-relaxed text-amber-900 dark:bg-amber-900/20 dark:text-amber-300">
                                                 {templateSyncWarning}
                                             </div>
                                         )}

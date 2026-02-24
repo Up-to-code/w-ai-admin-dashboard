@@ -21,6 +21,9 @@ type TypedWhatsAppError = Error & {
 };
 
 async function withAppSecretProof(ctx: any, url: string, accessToken: string): Promise<string> {
+  if ((process.env.WHATSAPP_DISABLE_APPSECRET_PROOF ?? "").trim() === "1") {
+    return url;
+  }
   const appSecret = process.env.WHATSAPP_APP_SECRET;
   if (!appSecret?.trim()) return url;
   const appsecret_proof = await ctx.runAction(internal.nodeUtils.createAppSecretProof, {

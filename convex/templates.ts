@@ -86,6 +86,9 @@ async function withAppSecretProof(
   url: URL,
   accessToken: string
 ): Promise<URL> {
+  if ((process.env.WHATSAPP_DISABLE_APPSECRET_PROOF ?? "").trim() === "1") {
+    return url;
+  }
   const appSecret = process.env.WHATSAPP_APP_SECRET?.trim();
   if (!appSecret) return url;
   const proof = (await ctx.runAction(internal.nodeUtils.createAppSecretProof, {
