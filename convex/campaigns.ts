@@ -736,7 +736,8 @@ export const sendToContact = internalAction({
         };
 
         if (config.skipRecentlyContacted && contact.lastMessagedAt) {
-            const campaignAllowsBypass = campaign.isTestCampaign && campaign.testBypassRecentContact;
+            const campaignAllowsBypass =
+                campaign.isTestCampaign === true && campaign.testBypassRecentContact === true;
             const normalizedContactPhone = normalizePhoneForComparison(contact.phone);
             const bypassedForContact = isBypassedTestContact(
                 campaignAllowsBypass,
