@@ -37,6 +37,14 @@ function normalizeToken(token: string | null | undefined): string | null {
   return t && t.length > 0 ? t : null;
 }
 
+function requireScopedTemplatePhoneNumberId(raw: string): string {
+  const value = raw.trim();
+  if (!value) {
+    throw new Error("Template operations require a non-empty phoneNumberId.");
+  }
+  return value;
+}
+
 function normalizeTemplateLanguageKey(value: unknown): string {
   if (typeof value === "string") {
     return value.trim().toLowerCase().replace("-", "_");
@@ -330,10 +338,11 @@ export const createTemplate = action({
     language: v.string(),
     category: v.string(),
     components: v.any(), // Array of components
-    phoneNumberId: v.optional(v.string()),
+    phoneNumberId: v.string(),
   },
   handler: async (ctx, args) => {
-    const config = await getWhatsAppConfig(ctx, args.phoneNumberId);
+    const phoneNumberId = requireScopedTemplatePhoneNumberId(args.phoneNumberId);
+    const config = await getWhatsAppConfig(ctx, phoneNumberId);
     const { accessToken, wabaId } = config;
     if (!wabaId) {
       throw new Error(
@@ -383,7 +392,7 @@ export const createTemplate = action({
 
     // Upsert into local DB
     await ctx.runMutation((internal as any).templates.upsert, {
-      phoneNumberId: args.phoneNumberId,
+      phoneNumberId,
       name: args.name,
       language: args.language,
       category: args.category,
@@ -399,11 +408,12 @@ export const createTemplate = action({
 
 export const fetchTemplates = action({
   args: {
-    phoneNumberId: v.optional(v.string()), // When set, use this number's token and WABA from DB; else first number with token or env
+    phoneNumberId: v.string(), // Template sync is always scoped to a selected sending number.
   },
   handler: async (ctx, args) => {
-    const config = await getWhatsAppConfig(ctx, args.phoneNumberId);
-    const { accessToken, wabaId, phoneId } = config;
+    const phoneNumberId = requireScopedTemplatePhoneNumberId(args.phoneNumberId);
+    const config = await getWhatsAppConfig(ctx, phoneNumberId);
+    const { accessToken, wabaId } = config;
     if (!wabaId) {
       throw new Error(
         "Missing WhatsApp config: set a number with access token in Integrations, or set WHATSAPP_ACCESS_TOKEN and WHATSAPP_WABA_ID in the environment."
@@ -433,7 +443,7 @@ export const fetchTemplates = action({
       const normalizedCode = code ?? response.status;
       const categorized = categorizeWhatsAppError(normalizedCode, message);
       if (categorized.category === "AUTH_ERROR" || normalizedCode === 190 || response.status === 401 || response.status === 403) {
-        await markNumberAuthFailureSafe(ctx, args.phoneNumberId ?? phoneId, normalizedCode, message);
+        await markNumberAuthFailureSafe(ctx, phoneNumberId, normalizedCode, message);
       }
 
       const suggestedAction = categorized.suggestedAction ?? "Review error message and retry";
@@ -458,7 +468,7 @@ export const fetchTemplates = action({
       );
     }
 
-    await markNumberAuthHealthySafe(ctx, args.phoneNumberId ?? phoneId);
+    await markNumberAuthHealthySafe(ctx, phoneNumberId);
     const templatesList = (data.data || []) as Array<{ name: string; language?: string; components?: any[] }>;
 
     // Enrich each template with full component structure from single-template fetch.
@@ -535,10 +545,11 @@ export const markAsRead = action({
 export const getTemplate = action({
   args: {
     name: v.string(),
-    phoneNumberId: v.optional(v.string()),
+    phoneNumberId: v.string(),
   },
   handler: async (ctx, args) => {
-    const config = await getWhatsAppConfig(ctx, args.phoneNumberId);
+    const phoneNumberId = requireScopedTemplatePhoneNumberId(args.phoneNumberId);
+    const config = await getWhatsAppConfig(ctx, phoneNumberId);
     const { accessToken, wabaId } = config;
     if (!wabaId) {
       throw new Error(
@@ -572,10 +583,11 @@ export const getTemplate = action({
 export const deleteTemplate = action({
   args: {
     name: v.string(),
-    phoneNumberId: v.optional(v.string()),
+    phoneNumberId: v.string(),
   },
   handler: async (ctx, args) => {
-    const config = await getWhatsAppConfig(ctx, args.phoneNumberId);
+    const phoneNumberId = requireScopedTemplatePhoneNumberId(args.phoneNumberId);
+    const config = await getWhatsAppConfig(ctx, phoneNumberId);
     const { accessToken, wabaId } = config;
     if (!wabaId) {
       throw new Error(

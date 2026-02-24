@@ -19,6 +19,7 @@ type AuthContextType = {
   userId: string | null
   role: UserRole | null
   isAdmin: boolean
+  isAgent: boolean
   loading: boolean
   login: (token: string, id: string, role?: UserRole) => void
   logout: () => void
@@ -43,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (dbUser === undefined ? !!authStorage.getAuthToken() : dbUser !== null)
   const loading = !!storedUserId && dbUser === undefined
   const isAdmin = role === "admin"
+  const isAgent = role === "agent"
 
   useEffect(() => {
     if (!storedUserId) {
@@ -82,6 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         userId: isAuthenticated ? storedUserId : null,
         role,
         isAdmin,
+        isAgent,
         loading,
         login,
         logout,

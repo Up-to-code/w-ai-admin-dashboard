@@ -6,6 +6,7 @@ import { api } from "@/mock/convex-api"
 import { useWorkspace } from "@/contexts/WorkspaceContext"
 import { markScopedTemplatesSynced, shouldSyncScopedTemplates } from "@/lib/templateSyncCache"
 import { useOptionalConvexQuery } from "@/hooks/useOptionalConvexQuery"
+import { useScopedApprovedTemplates } from "@/hooks/useScopedApprovedTemplates"
 import { runConvexActionSafe } from "@/lib/convexActionSafe"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -39,7 +40,8 @@ import {
     Edit,
     ChevronDown,
     Users,
-    UserPlus
+    UserPlus,
+    CheckCircle2
 } from "lucide-react"
 
 // Mock Workflows
@@ -97,19 +99,7 @@ export default function WorkflowsPage() {
     const effectivePhoneNumberId =
         !activePhoneNumberId || activePhoneNumberId === "__all__" ? undefined : activePhoneNumberId
     const workflows = (useQuery(api.workflows.list, effectivePhoneNumberId ? { phoneNumberId: effectivePhoneNumberId } : {}) as any[] | undefined) || []
-    const legacyTemplates = useQuery(
-        api.templates.list,
-        effectivePhoneNumberId ? { phoneNumberId: effectivePhoneNumberId } : "skip"
-    ) as any[] | undefined
-    const scopedTemplatesQuery = useOptionalConvexQuery<any[]>(
-        (api as any).templates.listScopedApproved,
-        enableExtendedCampaignApis && effectivePhoneNumberId ? { phoneNumberId: effectivePhoneNumberId } : "skip",
-        enableExtendedCampaignApis
-    )
-    const templatesSource = (enableExtendedCampaignApis && scopedTemplatesQuery.data
-        ? scopedTemplatesQuery.data
-        : legacyTemplates) as any[] | undefined
-    const templates = (templatesSource || []).filter((template: any) => template.status === "APPROVED")
+    const { templates, source: templatesSource } = useScopedApprovedTemplates(effectivePhoneNumberId)
     const templateHealthQuery = useOptionalConvexQuery<any>(
         (api as any).templates.getScopedTemplateHealth,
         enableExtendedCampaignApis && effectivePhoneNumberId ? { phoneNumberId: effectivePhoneNumberId } : "skip",
@@ -152,7 +142,6 @@ export default function WorkflowsPage() {
               "Cannot sync/send templates for this number until sending readiness issues are resolved."
             : null
     const optionalExtendedApisUnavailable =
-        scopedTemplatesQuery.unavailable ||
         templateHealthQuery.unavailable ||
         sendReadinessQuery.unavailable
     const selectedTemplateDoc = (templates || []).find((t: any) => t._id === actionConfig.templateId)
@@ -406,6 +395,15 @@ export default function WorkflowsPage() {
                                 </div>
                                 {selectedAction === "send_template" && (
                                     <div className="space-y-2 p-4 bg-muted/50 rounded-xl">
+                                        {!effectivePhoneNumberId ? (
+                                            <div className="rounded-lg border-2 border-dashed border-amber-300/70 bg-amber-50/80 dark:bg-amber-900/20 p-4 text-center">
+                                                <p className="text-amber-900 dark:text-amber-200 font-medium text-sm">اختر رقم إرسال أولاً</p>
+                                                <p className="text-xs text-amber-800/90 dark:text-amber-300/90 mt-1">
+                                                    حدد رقماً محدداً من الرقم النشط بدلاً من &quot;كل الأرقام&quot; لعرض القوالب المعتمدة لهذا الرقم.
+                                                </p>
+                                            </div>
+                                        ) : (
+                                        <>
                                         <div className="flex items-center justify-between">
                                             <Label>اختر القالب</Label>
                                             <Button
@@ -461,9 +459,6 @@ export default function WorkflowsPage() {
                                                     ))}
                                             </SelectContent>
                                         </Select>
-                                        {!effectivePhoneNumberId && (
-                                            <div className="text-xs text-destructive">اختر رقمًا محددًا بدلاً من &quot;كل الأرقام&quot;.</div>
-                                        )}
                                         {templateSyncError && (
                                             <div className="space-y-2 text-xs text-destructive">
                                                 <div>تعذر مزامنة القوالب: {templateSyncError}</div>
@@ -482,17 +477,27 @@ export default function WorkflowsPage() {
                                                 بعض واجهات القوالب غير متاحة في نسخة Convex الحالية. سيتم استخدام القوالب المتاحة فقط.
                                             </div>
                                         )}
-                                        {templates.length === 0 && effectivePhoneNumberId && !isSyncingTemplates && !templateSyncError && (
-                                            <div className="space-y-2 text-xs text-muted-foreground">
-                                                <div>لا توجد قوالب مرتبطة بهذا الرقم بعد المزامنة.</div>
+                                        {templatesSource === "listFallback" && (
+                                            <div className="text-xs text-amber-700 dark:text-amber-300">
+                                                يتم عرض القوالب عبر مسار بديل لأن `listScopedApproved` غير متاحة في نسخة Convex الحالية.
+                                            </div>
+                                        )}
+                                        {templates.length === 0 && !isSyncingTemplates && !templateSyncError && (
+                                            <div className="space-y-2 text-xs text-muted-foreground rounded-lg border border-dashed p-3">
+                                                <p className="font-medium text-foreground">لا توجد قوالب معتمدة لهذا الرقم.</p>
+                                                <p>استخدم &quot;مزامنة&quot; لجلبها من Meta، أو أنشئ واعتمد القوالب في Meta Business Suite أولاً.</p>
                                                 <a href="/templates" className="inline-flex items-center rounded-md border px-2 py-1 text-[11px] text-foreground hover:bg-muted">
                                                     إدارة القوالب
                                                 </a>
                                             </div>
                                         )}
                                         {selectedTemplateDoc && (
-                                            <div className="text-xs text-muted-foreground">
-                                                اللغة المعتمدة: <span className="font-medium">{selectedTemplateDoc.language}</span>
+                                            <div className="rounded-lg border border-green-200 dark:border-green-900/50 bg-green-50 dark:bg-green-900/20 p-2 text-xs text-green-800 dark:text-green-200">
+                                                <span className="font-medium flex items-center gap-2">
+                                                    <CheckCircle2 className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                                                    معتمد لهذا الرقم
+                                                </span>
+                                                <span className="text-muted-foreground"> — اللغة: {selectedTemplateDoc.language}</span>
                                             </div>
                                         )}
                                         {!selectedTemplateDoc && actionConfig.templateId && (
@@ -502,6 +507,8 @@ export default function WorkflowsPage() {
                                                     مزامنة القوالب
                                                 </a>
                                             </div>
+                                        )}
+                                        </>
                                         )}
                                     </div>
                                 )}

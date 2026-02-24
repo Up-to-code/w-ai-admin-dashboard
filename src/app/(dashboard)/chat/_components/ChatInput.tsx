@@ -7,6 +7,7 @@ import { useQuery, useMutation, useAction } from "convex/react"
 import { api } from "@/mock/convex-api"
 import { markScopedTemplatesSynced, shouldSyncScopedTemplates } from "@/lib/templateSyncCache"
 import { useOptionalConvexQuery } from "@/hooks/useOptionalConvexQuery"
+import { useScopedApprovedTemplates } from "@/hooks/useScopedApprovedTemplates"
 import { runConvexActionSafe } from "@/lib/convexActionSafe"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -27,19 +28,7 @@ export function ChatInput({ chatId }: ChatInputProps) {
   const enableExtendedCampaignApis = process.env.NEXT_PUBLIC_EXTENDED_CAMPAIGN_APIS === "1"
   const isRealChatId = chatId && chatId !== "new"
   const chat = useQuery(api.chat.getChat, isRealChatId ? { chatId: chatId as any } : "skip") as any
-  const legacyTemplates = useQuery(
-    api.templates.list,
-    chat?.phoneNumberId ? { phoneNumberId: chat.phoneNumberId } : "skip"
-  ) as any[] | undefined
-  const scopedTemplatesQuery = useOptionalConvexQuery<any[]>(
-    (api as any).templates.listScopedApproved,
-    enableExtendedCampaignApis && chat?.phoneNumberId ? { phoneNumberId: chat.phoneNumberId } : "skip",
-    enableExtendedCampaignApis
-  )
-  const templatesSource = (enableExtendedCampaignApis && scopedTemplatesQuery.data
-    ? scopedTemplatesQuery.data
-    : legacyTemplates) as any[] | undefined
-  const templates = (templatesSource || []).filter((template: any) => template.status === "APPROVED")
+  const { templates, source: templatesSource } = useScopedApprovedTemplates(chat?.phoneNumberId)
   const templateHealthQuery = useOptionalConvexQuery<any>(
     (api as any).templates.getScopedTemplateHealth,
     enableExtendedCampaignApis && chat?.phoneNumberId ? { phoneNumberId: chat.phoneNumberId } : "skip",
@@ -81,7 +70,6 @@ export function ChatInput({ chatId }: ChatInputProps) {
         "Cannot sync/send templates for this number until sending readiness issues are resolved."
       : null
   const optionalExtendedApisUnavailable =
-    scopedTemplatesQuery.unavailable ||
     templateHealthQuery.unavailable ||
     sendReadinessQuery.unavailable
 
@@ -437,6 +425,11 @@ export function ChatInput({ chatId }: ChatInputProps) {
                   بعض واجهات القوالب غير متاحة في نسخة Convex الحالية. سيتم عرض القوالب المتاحة فقط.
                 </div>
               ) : null}
+              {templatesSource === "listFallback" ? (
+                <div className="rounded-md border border-amber-300/50 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-900/20 dark:text-amber-300">
+                  يتم عرض القوالب عبر مسار بديل لأن `listScopedApproved` غير متاحة في نسخة Convex الحالية.
+                </div>
+              ) : null}
 
               <div className="relative mb-4">
                 <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -480,7 +473,7 @@ export function ChatInput({ chatId }: ChatInputProps) {
                               <div className="flex items-center gap-1">
                                 <span className="bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 px-1.5 py-0.5 rounded text-[10px]">{t.language}</span>
                                 <span className="bg-muted text-muted-foreground px-1.5 py-0.5 rounded text-[10px]">
-                                  {t.phoneNumberId ? "Scoped" : "Global"}
+                                  الرقم الحالي
                                 </span>
                               </div>
                             </div>
@@ -523,7 +516,7 @@ export function ChatInput({ chatId }: ChatInputProps) {
                               </div>
                             </div>
                             <div className="text-xs text-muted-foreground mt-1">
-                              {t.category} · {t.language} · {t.phoneNumberId ? "Scoped" : "Global"}
+                              {t.category} · {t.language} · الرقم الحالي
                             </div>
                           </CardContent>
                         </Card>

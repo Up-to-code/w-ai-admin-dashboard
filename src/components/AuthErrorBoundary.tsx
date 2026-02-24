@@ -2,7 +2,7 @@
 
 import { Component, ErrorInfo, ReactNode, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { useAuth } from "@/contexts/AuthContext"
+import { authStorage } from "@/lib/auth-storage"
 import { Loader2 } from "lucide-react"
 
 interface Props {
@@ -34,9 +34,9 @@ export class AuthErrorBoundary extends Component<Props, State> {
     if (this.state.hasError && this.state.error) {
       const msg = this.state.error.message || ""
       const isInvalidUserId =
+        msg.includes("ArgumentValidationError") &&
         msg.includes("does not match the table name") &&
-        msg.includes("users") &&
-        (msg.includes("chats") || msg.includes("validator"))
+        (msg.includes("v.id(\"users\")") || msg.includes(".userId"))
 
       if (isInvalidUserId) {
         return <AuthRecoveryFallback onRecovered={this.reset} />
@@ -48,14 +48,13 @@ export class AuthErrorBoundary extends Component<Props, State> {
 }
 
 function AuthRecoveryFallback({ onRecovered }: { onRecovered: () => void }) {
-  const { logout } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
-    logout()
+    authStorage.clearAuth()
     router.push("/login")
     onRecovered()
-  }, [])
+  }, [router])
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-background p-8" dir="rtl">

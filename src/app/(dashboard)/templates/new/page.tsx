@@ -26,7 +26,6 @@ import {
     Plus,
     X,
     CheckCircle2,
-    Smartphone,
     Link2,
     Phone,
     AlertCircle,
@@ -82,7 +81,7 @@ export default function NewTemplatePage() {
     const addToStore = useMutation(api.templateStore.add)
     const existingTemplate = useQuery(
         api.templates.getByName,
-        editName ? { name: editName, phoneNumberId: effectivePhoneNumberId } : "skip"
+        editName && effectivePhoneNumberId ? { name: editName, phoneNumberId: effectivePhoneNumberId } : "skip"
     )
     const storeTemplate = useQuery(
         api.templateStore.get,
@@ -1340,22 +1339,13 @@ export default function NewTemplatePage() {
                 {/* Preview Column */}
                 <div className="lg:col-span-4">
                     <div className="sticky top-8">
-                        <div className="relative mx-auto border-gray-800 dark:border-gray-800 bg-gray-900 border-[14px] rounded-[2.5rem] h-[600px] w-[300px] shadow-2xl flex flex-col">
-                            {/* ... (Same frame elements) ... */}
-                            <div className="w-[148px] h-[18px] bg-gray-800 top-0 rounded-b-[1rem] left-1/2 -translate-x-1/2 absolute z-20"></div>
-                            
-                            {/* WhatsApp Header */}
-                            <div className="bg-[#008069] dark:bg-[#202c33] p-3 pt-8 flex items-center gap-2 text-white z-10 rounded-t-[2rem]">
-                                <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center">
-                                    <Smartphone className="h-4 w-4" />
+                        <Card className="mx-auto w-full max-w-[360px] overflow-hidden border shadow-sm">
+                            <CardContent className="space-y-3 bg-muted/20 p-4">
+                                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                    <LayoutTemplate className="h-4 w-4" />
+                                    معاينة مباشرة
                                 </div>
-                                <div className="flex-1">
-                                    <div className="text-sm font-semibold">معاينة مباشرة</div>
-                                </div>
-                            </div>
-                            
-                            {/* Message Area */}
-                            <div className="flex-1 p-3 overflow-y-auto bg-[#E5DDD5] dark:bg-[#111b21] bg-opacity-90 relative rounded-b-[2rem] flex flex-col">
+                                <div className="max-h-[560px] overflow-y-auto rounded-xl bg-muted/40 p-3">
                                 {templateType === "STANDARD" ? (
                                     <div className="bg-white dark:bg-[#202c33] p-2 rounded-lg rounded-tl-none shadow-sm max-w-[90%] mb-2">
                                         {/* Standard Preview */}
@@ -1456,8 +1446,9 @@ export default function NewTemplatePage() {
                                         </div>
                                     </div>
                                 ) : null}
-                            </div>
-                        </div>
+                                </div>
+                            </CardContent>
+                        </Card>
                     </div>
                 </div>
             </div>

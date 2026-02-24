@@ -522,23 +522,14 @@ export default function TemplateStorePage() {
           {previewStoreTemplate && (
             <>
               <p className="text-sm font-medium text-center text-muted-foreground mb-3">معاينة القالب</p>
-              <div className="relative mx-auto border-gray-800 dark:border-gray-800 bg-gray-900 border-[14px] rounded-[2.5rem] h-[560px] w-[280px] sm:w-[300px] shadow-xl flex flex-col flex-shrink-0">
-                <div className="w-[120px] sm:w-[130px] h-[14px] bg-gray-800 top-0 rounded-b-[0.75rem] left-1/2 -translate-x-1/2 absolute z-20" />
-                <div className="bg-[#008069] dark:bg-[#202c33] p-3 pt-7 flex items-center gap-2 text-white z-10 rounded-t-[2rem]">
-                  <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center shrink-0">
-                    <FileText className="h-4 w-4" />
+              <Card className="mx-auto w-full max-w-[320px] border shadow-none">
+                <CardContent className="space-y-3 bg-muted/20 p-4">
+                  <div className="text-sm font-medium text-muted-foreground truncate">
+                    {templateDisplayName(previewStoreTemplate.name)}
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold truncate">
-                      {templateDisplayName(previewStoreTemplate.name)}
-                    </div>
-                    <div className="text-[10px] opacity-80">حساب أعمال</div>
-                  </div>
-                </div>
-                <div className="flex-1 p-3 overflow-y-auto bg-[#E5DDD5] dark:bg-[#111b21] relative rounded-b-[2rem]">
                   <TemplatePreview template={{ components: previewStoreTemplate.components }} />
-                </div>
-              </div>
+                </CardContent>
+              </Card>
               <div className="flex flex-col-reverse sm:flex-row gap-2 justify-center items-stretch sm:items-center mt-4 pt-2 border-t border-border">
                 <Button variant="outline" onClick={() => setPreviewStoreTemplate(null)} className="rounded-xl order-2 sm:order-1">
                   إغلاق

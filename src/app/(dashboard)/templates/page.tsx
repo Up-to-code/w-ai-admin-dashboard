@@ -25,7 +25,6 @@ import {
     Video,
     RefreshCw,
     Trash2,
-    Link2,
     Phone,
     MoreVertical
 } from "lucide-react"
@@ -38,6 +37,8 @@ import {
 
 import { useWorkspace } from "@/contexts/WorkspaceContext"
 import { useOptionalConvexQuery } from "@/hooks/useOptionalConvexQuery"
+import { TemplatePreview } from "@/components/TemplatePreview"
+import { runConvexActionSafe } from "@/lib/convexActionSafe"
 
 export default function TemplatesPage() {
     const enableExtendedCampaignApis = process.env.NEXT_PUBLIC_EXTENDED_CAMPAIGN_APIS === "1"
@@ -55,7 +56,8 @@ export default function TemplatesPage() {
     )
     const templateHealth = templateHealthQuery.data
     const templates =
-        useQuery(api.templates.list, effectivePhoneNumberId ? { phoneNumberId: effectivePhoneNumberId } : {}) || []
+        useQuery(api.templates.list, effectivePhoneNumberId ? { phoneNumberId: effectivePhoneNumberId } : "skip") as Doc<"templates">[] | undefined
+    const templatesList = templates ?? []
     const isTokenAuthFailed = templateHealth?.tokenStatus === "auth_failed"
     const tokenAuthFailedMessage = templateHealth?.lastAuthErrorMessage as string | undefined
 
@@ -73,14 +75,38 @@ export default function TemplatesPage() {
     }
 
     const handleSync = async () => {
+        if (!effectivePhoneNumberId) {
+            showToast("error", "حدد رقماً أولاً لعرض ومزامنة قوالبه من Meta.")
+            return
+        }
         if (isTokenAuthFailed) {
             showToast("error", "لا يمكن مزامنة القوالب حتى إعادة ربط Access Token لهذا الرقم.")
             return
         }
         setIsSyncing(true)
         try {
-            const count = await syncFromMeta(effectivePhoneNumberId ? { phoneNumberId: effectivePhoneNumberId } : {})
-            showToast("success", `تم مزامنة ${count} قالب بنجاح`)
+            const syncResult = await runConvexActionSafe(syncFromMeta as any, { phoneNumberId: effectivePhoneNumberId }, {
+                actionName: "templates:syncFromMeta",
+            })
+            if (!syncResult.ok) {
+                showToast(
+                    "error",
+                    syncResult.unavailable
+                        ? "دالة مزامنة القوالب غير متاحة في نسخة Convex الحالية. انشر backend ثم أعد المحاولة."
+                        : (syncResult.message || "تعذر مزامنة القوالب.")
+                )
+                return
+            }
+            const rawResult = syncResult.data as any
+            const fetched = Number(typeof rawResult === "number" ? rawResult : rawResult?.fetchedCount ?? 0)
+            const upserted = Number(typeof rawResult === "number" ? rawResult : rawResult?.upsertedCount ?? fetched)
+            const deleted = Number(typeof rawResult === "number" ? 0 : rawResult?.deletedCount ?? 0)
+            const deduped = Number(typeof rawResult === "number" ? 0 : rawResult?.dedupedCount ?? 0)
+            const removedGlobal = Number(typeof rawResult === "number" ? 0 : rawResult?.removedGlobalCount ?? 0)
+            showToast(
+                "success",
+                `تمت مزامنة ${fetched} قالب (تحديث/إضافة: ${upserted}، حذف محلي: ${deleted}، إزالة مكرر: ${deduped}، إزالة قديم عام: ${removedGlobal}).`
+            )
         } catch (error) {
             console.error("Sync failed:", error)
             const message = error instanceof Error ? error.message : "فشل في المزامنة"
@@ -92,9 +118,13 @@ export default function TemplatesPage() {
 
     const handleDelete = async () => {
         if (!deleteTemplateData) return
+        if (!effectivePhoneNumberId) {
+            showToast("error", "حدد رقماً أولاً لحذف قالبه.")
+            return
+        }
         setIsDeleting(true)
         try {
-            await deleteTemplate({ name: deleteTemplateData.name, ...(effectivePhoneNumberId ? { phoneNumberId: effectivePhoneNumberId } : {}) })
+            await deleteTemplate({ name: deleteTemplateData.name, phoneNumberId: effectivePhoneNumberId })
             showToast("success", `تم حذف القالب "${deleteTemplateData.name}" بنجاح`)
             setDeleteTemplateData(null)
         } catch (error: any) {
@@ -110,7 +140,7 @@ export default function TemplatesPage() {
         }
     }
 
-    const filteredTemplates = (templates || []).filter((t: Doc<"templates">) => {
+    const filteredTemplates = templatesList.filter((t: Doc<"templates">) => {
         const matchesSearch = t.name.includes(search) || (t.components && JSON.stringify(t.components).includes(search))
         const matchesTab = activeTab === "all" || t.status.toLowerCase() === activeTab.toLowerCase()
         return matchesSearch && matchesTab
@@ -146,10 +176,10 @@ export default function TemplatesPage() {
     }
 
     const stats = {
-        total: templates.length,
-        approved: templates.filter((t: Doc<"templates">) => t.status === "APPROVED").length,
-        pending: templates.filter((t: Doc<"templates">) => t.status === "PENDING").length,
-        rejected: templates.filter((t: Doc<"templates">) => t.status === "REJECTED").length,
+        total: templatesList.length,
+        approved: templatesList.filter((t: Doc<"templates">) => t.status === "APPROVED").length,
+        pending: templatesList.filter((t: Doc<"templates">) => t.status === "PENDING").length,
+        rejected: templatesList.filter((t: Doc<"templates">) => t.status === "REJECTED").length,
     }
 
     return (
@@ -166,7 +196,7 @@ export default function TemplatesPage() {
                             متجر القوالب
                         </Button>
                     </Link>
-                    <Button variant="outline" className="gap-2" onClick={handleSync} disabled={isSyncing || isTokenAuthFailed}>
+                    <Button variant="outline" className="gap-2" onClick={handleSync} disabled={!effectivePhoneNumberId || isSyncing || isTokenAuthFailed}>
                         <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
                         مزامنة
                     </Button>
@@ -179,6 +209,16 @@ export default function TemplatesPage() {
                 </div>
             </div>
 
+            {!effectivePhoneNumberId ? (
+                <div className="rounded-lg border-2 border-dashed border-amber-300/70 bg-amber-50/80 dark:bg-amber-900/20 p-8 text-center">
+                    <Phone className="h-12 w-12 mx-auto text-amber-600 dark:text-amber-400 mb-4" />
+                    <p className="text-amber-900 dark:text-amber-200 font-medium text-lg">حدد رقماً لعرض ومزامنة قوالبه من Meta</p>
+                    <p className="text-sm text-amber-800/90 dark:text-amber-300/90 mt-2 max-w-md mx-auto">
+                        اختر رقماً محدداً من القائمة &quot;الرقم النشط&quot; في الشريط الجانبي لعرض القوالب المعتمدة لهذا الرقم ومزامنتها. القوالب مرتبطة بكل رقم على حدة لضمان التوافق مع Meta.
+                    </p>
+                </div>
+            ) : (
+            <>
             {/* Stats Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <StatCard 
@@ -246,7 +286,7 @@ export default function TemplatesPage() {
             </div>
 
             {/* Templates Grid */}
-            {templates.length === 0 ? (
+            {templatesList.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 text-center bg-muted/5 rounded-3xl border border-dashed border-muted-foreground/20">
                     <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mb-6">
                         <FileText className="h-10 w-10 text-primary" />
@@ -324,127 +364,24 @@ export default function TemplatesPage() {
                 </div>
             )}
 
+            </>
+            )}
+
             {/* Preview Modal */}
             <Dialog open={!!previewTemplate} onOpenChange={(open) => !open && setPreviewTemplate(null)}>
-                <DialogContent className="max-w-sm p-0 overflow-hidden bg-transparent border-none shadow-none">
-                    <DialogHeader className="sr-only">
+                <DialogContent className="max-w-2xl">
+                    <DialogHeader>
                         <DialogTitle>معاينة القالب</DialogTitle>
-                        <DialogDescription>عرض شكل القالب في واجهة محاكاة واتساب.</DialogDescription>
+                        <DialogDescription>عرض القالب بشكل مبسط بدون إطار الجهاز.</DialogDescription>
                     </DialogHeader>
-                    {previewTemplate && (
-                        <div className="relative mx-auto border-gray-800 dark:border-gray-800 bg-gray-900 border-[14px] rounded-[2.5rem] h-[600px] w-[320px] shadow-xl flex flex-col">
-                            <div className="w-[148px] h-[18px] bg-gray-800 top-0 rounded-b-[1rem] left-1/2 -translate-x-1/2 absolute z-20"></div>
-                            <div className="h-[32px] w-[3px] bg-gray-800 absolute -left-[17px] top-[72px] rounded-l-lg"></div>
-                            <div className="h-[46px] w-[3px] bg-gray-800 absolute -left-[17px] top-[124px] rounded-l-lg"></div>
-                            <div className="h-[46px] w-[3px] bg-gray-800 absolute -left-[17px] top-[178px] rounded-l-lg"></div>
-                            <div className="h-[64px] w-[3px] bg-gray-800 absolute -right-[17px] top-[142px] rounded-r-lg"></div>
-                            
-                            {/* WhatsApp Header */}
-                            <div className="bg-[#008069] dark:bg-[#202c33] p-3 pt-8 flex items-center gap-2 text-white z-10 rounded-t-[2rem]">
-                                <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center">
-                                    <FileText className="h-4 w-4" />
-                                </div>
-                                <div className="flex-1">
-                                    <div className="text-sm font-semibold truncate">{previewTemplate.name}</div>
-                                    <div className="text-[10px] opacity-80">Business Account</div>
-                                </div>
-                            </div>
-                            
-                            {/* Message Area */}
-                            <div className="flex-1 p-3 overflow-y-auto bg-[#E5DDD5] dark:bg-[#111b21] bg-opacity-90 relative rounded-b-[2rem]">
-                                {previewTemplate.components?.some((c: any) => c.type === "CAROUSEL") ? (
-                                    // Carousel View
-                                    <div className="space-y-2">
-                                        <div className="bg-white dark:bg-[#202c33] p-2 rounded-lg rounded-tl-none shadow-sm max-w-[90%]">
-                                            <p className="text-sm text-gray-800 dark:text-gray-100 whitespace-pre-wrap">
-                                                {previewTemplate.components?.find((c: any) => c.type === "BODY")?.text || "Carousel Message"}
-                                            </p>
-                                        </div>
-                                        <div className="flex overflow-x-auto gap-2 pb-2 -mx-3 px-3 scrollbar-hide">
-                                            {previewTemplate.components.find((c: any) => c.type === "CAROUSEL")?.cards?.map((card: any, i: number) => (
-                                                <div key={i} className="bg-white dark:bg-[#202c33] rounded-lg shadow-sm min-w-[200px] max-w-[200px] overflow-hidden shrink-0">
-                                                    {card.components.find((c: any) => c.type === "HEADER") && (
-                                                        <div className="h-24 bg-gray-200 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
-                                                            {card.components.find((c: any) => c.type === "HEADER")?.format === "VIDEO" ? (
-                                                                <Video className="h-6 w-6 text-gray-400" />
-                                                            ) : (
-                                                                <ImageIcon className="h-6 w-6 text-gray-400" />
-                                                            )}
-                                                        </div>
-                                                    )}
-                                                    <div className="p-2">
-                                                        <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                                                            {card.components.find((c: any) => c.type === "BODY")?.text || "..."}
-                                                        </p>
-                                                        <div className="mt-2 space-y-1">
-                                                            {card.components.find((c: any) => c.type === "BUTTONS")?.buttons?.map((btn: any, bI: number) => (
-                                                                <div key={bI} className="bg-gray-50 dark:bg-[#2a3942] p-1 text-center text-xs text-[#00a884] rounded border border-gray-100 dark:border-gray-700">
-                                                                    {btn.text}
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                ) : (
-                                    // Standard View
-                                    <>
-                                        <div className="bg-white dark:bg-[#202c33] p-2 rounded-lg rounded-tl-none shadow-sm max-w-[90%] mb-2">
-                                            {/* Header Media */}
-                                            {previewTemplate.components?.find((c: any) => c.type === "HEADER") && (
-                                                <div className="mb-2">
-                                                    {previewTemplate.components.find((c: any) => c.type === "HEADER")?.format === "TEXT" ? (
-                                                        <p className="font-bold text-sm text-gray-900 dark:text-gray-100">
-                                                            {previewTemplate.components.find((c: any) => c.type === "HEADER")?.text}
-                                                        </p>
-                                                    ) : (
-                                                        <div className="bg-gray-200 dark:bg-gray-700 rounded-lg h-32 flex items-center justify-center">
-                                                            {previewTemplate.components.find((c: any) => c.type === "HEADER")?.format === "IMAGE" ? (
-                                                                <ImageIcon className="h-8 w-8 text-gray-400" />
-                                                            ) : (
-                                                                <Video className="h-8 w-8 text-gray-400" />
-                                                            )}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {/* Body */}
-                                            <p className="text-sm leading-relaxed text-gray-800 dark:text-gray-100 whitespace-pre-wrap">
-                                                {previewTemplate.components?.find((c: any) => c.type === "BODY")?.text || previewTemplate.content || "لا يوجد محتوى"}
-                                            </p>
-
-                                            {/* Footer */}
-                                            {previewTemplate.components?.find((c: any) => c.type === "FOOTER") && (
-                                                <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-2">
-                                                    {previewTemplate.components.find((c: any) => c.type === "FOOTER")?.text}
-                                                </p>
-                                            )}
-                                            
-                                            <div className="text-[10px] text-gray-400 text-right mt-1">
-                                                12:00 PM
-                                            </div>
-                                        </div>
-
-                                        {/* Buttons */}
-                                        {previewTemplate.components?.find((c: any) => c.type === "BUTTONS") && (
-                                            <div className="space-y-1 max-w-[90%]">
-                                                {previewTemplate.components.find((c: any) => c.type === "BUTTONS")?.buttons?.map((btn: any, i: number) => (
-                                                    <div key={i} className="bg-white dark:bg-[#202c33] rounded-lg p-2.5 text-center text-sm text-[#00a884] font-medium shadow-sm cursor-pointer hover:bg-gray-50 dark:hover:bg-[#2a3942] transition-colors flex items-center justify-center gap-2">
-                                                        {btn.type === "URL" && <Link2 className="h-3.5 w-3.5" />}
-                                                        {btn.type === "PHONE_NUMBER" && <Phone className="h-3.5 w-3.5" />}
-                                                        {btn.text}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </>
-                                )}
-                            </div>
-                        </div>
-                    )}
+                    {previewTemplate ? (
+                        <Card className="border shadow-none">
+                            <CardContent className="space-y-3 bg-muted/20 p-4">
+                                <div className="text-sm font-medium text-muted-foreground">{previewTemplate.name}</div>
+                                <TemplatePreview template={previewTemplate} />
+                            </CardContent>
+                        </Card>
+                    ) : null}
                 </DialogContent>
             </Dialog>
 

@@ -14,5 +14,9 @@ out/
 .vercel
 *.tsbuildinfo
 
+# Mobile apps (don't upload)
+mobile/
+mobile-ar/
+
 # Misc
 .DS_Store

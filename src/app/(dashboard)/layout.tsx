@@ -40,8 +40,10 @@ import { Suspense } from "react"
 const ALL_NUMBERS_SENTINEL = "__all__"
 
 // Sidebar Content Component
+type MenuItem = { href: string; icon: typeof LayoutDashboard; label: string; adminOnly?: boolean }
+
 function SidebarContent({ pathname }: { pathname: string }) {
-  const { userId, logout } = useAuth()
+  const { userId, isAdmin, logout } = useAuth()
   const { numbers, activePhoneNumberId, setActivePhoneNumberId } = useWorkspace()
   const router = useRouter()
   const user = useQuery(api.auth.getUser, userId ? { userId: userId as Id<"users"> } : "skip")
@@ -50,20 +52,21 @@ function SidebarContent({ pathname }: { pathname: string }) {
     logout()
     router.push("/login")
   }
-  const menuItems = [
+  const allMenuItems: MenuItem[] = [
     { href: "/", icon: LayoutDashboard, label: "لوحة التحكم" },
     { href: "/chat", icon: MessageSquare, label: "المحادثات" },
     { href: "/customers", icon: Users, label: "العملاء" },
     { href: "/products", icon: Package, label: "المنتجات" },
-    { href: "/campaigns", icon: Megaphone, label: "الحملات" },
-    { href: "/templates", icon: FileText, label: "القوالب" },
-    { href: "/templates/store", icon: Store, label: "متجر القوالب" },
-    { href: "/workflows", icon: Zap, label: "الأتمتة" },
-    { href: "/ai-settings", icon: Bot, label: "الذكاء الاصطناعي" },
-    { href: "/users", icon: UserCog, label: "إدارة المستخدمين" },
-    { href: "/integrations", icon: Link2, label: "التكاملات" },
-    { href: "/settings", icon: Settings, label: "الإعدادات" },
+    { href: "/campaigns", icon: Megaphone, label: "الحملات", adminOnly: true },
+    { href: "/templates", icon: FileText, label: "القوالب", adminOnly: true },
+    { href: "/templates/store", icon: Store, label: "متجر القوالب", adminOnly: true },
+    { href: "/workflows", icon: Zap, label: "الأتمتة", adminOnly: true },
+    { href: "/ai-settings", icon: Bot, label: "الذكاء الاصطناعي", adminOnly: true },
+    { href: "/users", icon: UserCog, label: "إدارة المستخدمين", adminOnly: true },
+    { href: "/integrations", icon: Link2, label: "التكاملات", adminOnly: true },
+    { href: "/settings", icon: Settings, label: "الإعدادات", adminOnly: true },
   ]
+  const menuItems = allMenuItems.filter((item) => !item.adminOnly || isAdmin)
 
   const isActive = (href: string) => {
     if (href === "/") return pathname === "/"

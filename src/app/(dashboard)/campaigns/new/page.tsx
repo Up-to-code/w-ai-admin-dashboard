@@ -40,6 +40,7 @@ import { TemplatePreview } from "@/components/TemplatePreview"
 import { getScopedTemplateSyncTtlMs, markScopedTemplatesSynced, shouldSyncScopedTemplates } from "@/lib/templateSyncCache"
 import type { Id } from "@/mock/dataModel"
 import { useOptionalConvexQuery } from "@/hooks/useOptionalConvexQuery"
+import { useScopedApprovedTemplates } from "@/hooks/useScopedApprovedTemplates"
 import { toast } from "sonner"
 import { toUserSafeConvexMessage } from "@/lib/convexErrors"
 import { runConvexActionSafe } from "@/lib/convexActionSafe"
@@ -88,19 +89,11 @@ export default function NewCampaignPage() {
     const testContactLimit = 5
 
     // Queries
-    const legacyTemplates = useQuery(
-        api.templates.list,
-        selectedPhoneNumberId ? { phoneNumberId: selectedPhoneNumberId } : "skip"
-    ) as any[] | undefined
-    const scopedTemplatesQuery = useOptionalConvexQuery<any[]>(
-        (api as any).templates.listScopedApproved,
-        enableExtendedCampaignApis && selectedPhoneNumberId ? { phoneNumberId: selectedPhoneNumberId } : "skip",
-        enableExtendedCampaignApis
-    )
-    const templatesSource = (enableExtendedCampaignApis && scopedTemplatesQuery.data
-        ? scopedTemplatesQuery.data
-        : legacyTemplates) as any[] | undefined
-    const templates = templatesSource?.filter((template: any) => template.status === "APPROVED")
+    const {
+        templates,
+        loading: templatesLoading,
+        source: templatesSource,
+    } = useScopedApprovedTemplates(selectedPhoneNumberId)
     const templateHealthQuery = useOptionalConvexQuery<any>(
         (api as any).templates.getScopedTemplateHealth,
         enableExtendedCampaignApis && selectedPhoneNumberId ? { phoneNumberId: selectedPhoneNumberId } : "skip",
@@ -163,7 +156,6 @@ export default function NewCampaignPage() {
               "Cannot sync/send templates for this number until sending readiness issues are resolved."
             : null
     const optionalExtendedApisUnavailable =
-        scopedTemplatesQuery.unavailable ||
         templateHealthQuery.unavailable ||
         sendReadinessQuery.unavailable
     const templateCriticalApisUnavailable = !enableExtendedCampaignApis || optionalExtendedApisUnavailable
@@ -251,7 +243,7 @@ export default function NewCampaignPage() {
     }, [selectedPhoneNumberId, selectedTemplate])
 
     useEffect(() => {
-        if (!selectedTemplate || !templates) return
+        if (!selectedTemplate) return
         const stillExists = templates.some((template) => template._id === selectedTemplate._id)
         if (stillExists) return
         setSelectedTemplate(null)
@@ -947,10 +939,26 @@ export default function NewCampaignPage() {
                             {currentStep === 2 && (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in slide-in-from-bottom-4 duration-500">
                                     <div className="space-y-4">
+                                        {!selectedPhoneNumberId ? (
+                                            <div className="rounded-lg border-2 border-dashed border-amber-300/70 bg-amber-50/80 dark:bg-amber-900/20 p-6 text-center">
+                                                <p className="text-amber-900 dark:text-amber-200 font-medium">اختر رقم إرسال أولاً</p>
+                                                <p className="text-sm text-amber-800/90 dark:text-amber-300/90 mt-1">
+                                                    يجب تحديد رقم الإرسال في الخطوة الأولى لعرض القوالب المعتمدة لهذا الرقم.
+                                                </p>
+                                                <Button
+                                                    variant="outline"
+                                                    className="mt-4"
+                                                    onClick={() => setCurrentStep(0)}
+                                                >
+                                                    العودة لتحديد الرقم
+                                                </Button>
+                                            </div>
+                                        ) : (
+                                        <>
                                         <div className="flex items-center justify-between">
                                             <Label className="text-base">اختر القالب</Label>
                                             <div className="flex items-center gap-2">
-                                                <Badge variant="outline" className="font-normal">{templates?.length || 0} قوالب متاحة</Badge>
+                                                <Badge variant="outline" className="font-normal">{templates.length} قوالب متاحة</Badge>
                                                 <Button
                                                     size="sm"
                                                     variant="outline"
@@ -982,6 +990,11 @@ export default function NewCampaignPage() {
                                                 بعض واجهات التحقق غير متاحة في نسخة Convex الحالية. يمكنك المتابعة باختيار قالب ثم النقر &quot;التالي&quot; — قد تفشل الحملة إذا كان القالب غير صالح. لتفعيل التحقق الكامل، انشر دوال الحملات/القوالب.
                                             </div>
                                         )}
+                                        {templatesSource === "listFallback" && (
+                                            <div className="rounded-lg border border-amber-300/50 bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-900/20 dark:text-amber-300">
+                                                تستخدم هذه الصفحة مساراً توافقياً لعرض القوالب المعتمدة لأن دالة `listScopedApproved` غير متاحة في نسخة Convex الحالية.
+                                            </div>
+                                        )}
 
                                         {isSyncingTemplates && (
                                             <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900 dark:bg-blue-900/20 dark:text-blue-200">
@@ -1005,19 +1018,19 @@ export default function NewCampaignPage() {
                                                     <div className="rounded-lg border border-amber-300/50 bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-900/20 dark:text-amber-300">
                                                         اختر رقم إرسال أولاً لعرض القوالب المرتبطة به.
                                                     </div>
-                                                ) : !templates ? (
+                                                ) : templatesLoading ? (
                                                     [1,2,3].map(i => <div key={i} className="h-24 bg-muted animate-pulse rounded-lg" />)
                                                 ) : templates.length === 0 ? (
                                                     <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground space-y-3">
-                                                        <p>لا توجد قوالب معتمدة مرتبطة بهذا الرقم بعد.</p>
+                                                        <p className="font-medium text-foreground">
+                                                            لا توجد قوالب معتمدة لهذا الرقم.
+                                                        </p>
+                                                        <p className="text-xs">
+                                                            استخدم &quot;مزامنة القوالب&quot; لجلبها من Meta، أو أنشئ واعتمد القوالب في Meta Business Suite أولاً.
+                                                        </p>
                                                         <p className="text-xs">
                                                             تتم المزامنة تلقائياً كل {syncTtlMinutes} دقائق لكل رقم. يمكنك المزامنة الآن أو إدارة القوالب من صفحة القوالب.
                                                         </p>
-                                                        {templateHealth?.hasAnyGlobalApproved ? (
-                                                            <p className="text-xs text-amber-700 dark:text-amber-300">
-                                                                توجد قوالب عامة لكن الإرسال الآن يتطلب قوالب مرتبطة بالرقم فقط.
-                                                            </p>
-                                                        ) : null}
                                                         <div className="flex gap-2">
                                                             <Button
                                                                 size="sm"
@@ -1055,13 +1068,21 @@ export default function NewCampaignPage() {
                                                             <div className="mt-3 flex gap-2">
                                                                 <Badge variant="secondary" className="text-[10px]">{template.category}</Badge>
                                                                 <Badge variant="outline" className="text-[10px]">{template.language}</Badge>
-                                                                <Badge variant="outline" className="text-[10px]">Scoped</Badge>
+                                                                <Badge variant="outline" className="text-[10px]">الرقم الحالي</Badge>
                                                             </div>
                                                         </div>
                                                     ))
                                                 )}
                                             </div>
                                         </ScrollArea>
+                                        {selectedTemplate && templateValidation?.ok === true && (
+                                            <div className="rounded-lg border border-green-200 dark:border-green-900/50 bg-green-50 dark:bg-green-900/20 p-3 text-sm text-green-800 dark:text-green-200">
+                                                <span className="font-medium flex items-center gap-2">
+                                                    <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
+                                                    معتمد لهذا الرقم
+                                                </span>
+                                            </div>
+                                        )}
                                         {selectedTemplate && templateValidation && !templateValidation.ok && (
                                             <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
                                                 <p className="font-medium">{templateValidation.message}</p>
@@ -1083,36 +1104,19 @@ export default function NewCampaignPage() {
                                                 {templateAutoClearedMessage}
                                             </div>
                                         )}
+                                        </>
+                                        )}
                                     </div>
 
-                                    {/* Phone Preview */}
-                                    <div className="relative mx-auto border-gray-800 dark:border-gray-800 bg-gray-900 border-[14px] rounded-[2.5rem] h-[500px] w-[300px]">
-                                        <div className="w-[148px] h-[18px] bg-gray-800 top-0 rounded-b-[1rem] left-1/2 -translate-x-1/2 absolute"></div>
-                                        <div className="h-[32px] w-[3px] bg-gray-800 absolute -left-[17px] top-[72px] rounded-l-lg"></div>
-                                        <div className="h-[46px] w-[3px] bg-gray-800 absolute -left-[17px] top-[124px] rounded-l-lg"></div>
-                                        <div className="h-[46px] w-[3px] bg-gray-800 absolute -left-[17px] top-[178px] rounded-l-lg"></div>
-                                        <div className="h-[64px] w-[3px] bg-gray-800 absolute -right-[17px] top-[142px] rounded-r-lg"></div>
-                                        <div className="rounded-[2rem] overflow-hidden w-full h-full bg-[#E5DDD5] dark:bg-[#111b21] relative flex flex-col">
-                                            {/* WhatsApp Header */}
-                                            <div className="bg-[#008069] dark:bg-[#202c33] p-3 pt-8 flex items-center gap-2 text-white">
-                                                <ChevronRight className="h-5 w-5 rotate-180" />
-                                                <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center">
-                                                    <Smartphone className="h-4 w-4" />
-                                                </div>
-                                                <div className="flex-1">
-                                                    <div className="text-sm font-semibold">W-AI Demo</div>
-                                                </div>
+                                    <Card className="mx-auto w-full max-w-[320px] overflow-hidden border shadow-sm">
+                                        <CardContent className="space-y-3 bg-muted/30 p-4">
+                                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                                <LayoutTemplate className="h-4 w-4" />
+                                                معاينة القالب
                                             </div>
-                                            
-                                            {/* Message Area */}
-                                            <div className="flex-1 p-3 overflow-y-auto bg-[url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')] bg-repeat opacity-90">
-                                                <TemplatePreview 
-                                                    template={selectedTemplate}
-                                                    className="max-w-[85%]"
-                                                />
-                                            </div>
-                                        </div>
-                                    </div>
+                                            <TemplatePreview template={selectedTemplate} />
+                                        </CardContent>
+                                    </Card>
                                 </div>
                             )}
 
@@ -1181,7 +1185,7 @@ export default function NewCampaignPage() {
                                                 <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
                                                     <Badge variant="secondary">{selectedTemplate.name}</Badge>
                                                     <Badge variant="outline">{selectedTemplate.language || "unknown"}</Badge>
-                                                    <Badge variant="outline">Scoped</Badge>
+                                                    <Badge variant="outline">الرقم الحالي</Badge>
                                                 </div>
                                             ) : null}
                                             <TemplatePreview template={selectedTemplate} />

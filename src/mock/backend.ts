@@ -888,7 +888,15 @@ export async function resolveMutation(ref: any, args?: any): Promise<any> {
     case "templates.syncFromMeta":
     case "templates.syncScopedFromMeta":
       bump();
-      return { syncedCount: templates.length, scopedApprovedCount: templates.filter((t) => t.status === "APPROVED").length };
+      return {
+        fetchedCount: templates.length,
+        upsertedCount: templates.length,
+        deletedCount: 0,
+        dedupedCount: 0,
+        removedGlobalCount: 0,
+        syncedCount: templates.length,
+        scopedApprovedCount: templates.filter((t) => t.status === "APPROVED").length,
+      };
 
     case "templates.deleteTemplate": {
       const name = String(args?.name || "");

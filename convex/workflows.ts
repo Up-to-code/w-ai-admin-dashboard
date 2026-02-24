@@ -132,6 +132,15 @@ async function executeWorkflowAction(ctx: any, workflow: any, contactPhone: stri
                 if (templateById && templateById.phoneNumberId !== scopedPhoneNumberId) {
                     throw new Error("Workflow template is no longer scoped to this sending number.");
                 }
+                if (!scopedPhoneNumberId) {
+                    await ctx.scheduler.runAfter(0, internal.notifications.create, {
+                        type: "warning",
+                        title: "Workflow Template Send Blocked",
+                        message: "A sending number is required for workflow template sends.",
+                        link: "/workflows",
+                    });
+                    return;
+                }
 
                 const scopedTemplateByName = await ctx.runQuery(internal.templates.getTemplateByName, {
                     name: templateName,

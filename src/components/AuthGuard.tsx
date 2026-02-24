@@ -7,15 +7,21 @@ import { AccessDenied } from "@/components/AccessDenied"
 import { Loader2 } from "lucide-react"
 
 const PUBLIC_PATHS = ["/login", "/register", "/terms", "/privacy", "/error"]
+const AGENT_ALLOWED_PATHS = ["/", "/chat", "/customers", "/products"]
 
 function isPublicPath(path: string): boolean {
   return PUBLIC_PATHS.some((p) => path === p || path.startsWith(`${p}/`))
 }
 
+function isAgentAllowedPath(path: string): boolean {
+  return AGENT_ALLOWED_PATHS.some((p) => path === p || path.startsWith(`${p}/`))
+}
+
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
-  const { isAuthenticated, isAdmin, loading } = useAuth()
+  const { isAuthenticated, isAdmin, isAgent, loading } = useAuth()
+  const canAccessApp = isAdmin || isAgent
 
   useEffect(() => {
     if (loading) return
@@ -32,11 +38,15 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       return
     }
 
-    if (isAuthenticated && !isAdmin) {
-      // Non-admin authenticated user on non-public path - AccessDenied handles display
+    if (isAuthenticated && !canAccessApp) {
       return
     }
-  }, [pathname, isAuthenticated, isAdmin, loading, router])
+
+    if (isAuthenticated && isAgent && !isAdmin && !isAgentAllowedPath(pathname ?? "")) {
+      router.replace("/")
+      return
+    }
+  }, [pathname, isAuthenticated, isAdmin, isAgent, canAccessApp, loading, router])
 
   if (loading) {
     return (
@@ -54,8 +64,16 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     )
   }
 
-  if (isAuthenticated && !isAdmin && !isPublicPath(pathname ?? "")) {
+  if (isAuthenticated && !canAccessApp && !isPublicPath(pathname ?? "")) {
     return <AccessDenied />
+  }
+
+  if (isAuthenticated && isAgent && !isAdmin && !isAgentAllowedPath(pathname ?? "")) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background" dir="rtl">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    )
   }
 
   return <>{children}</>

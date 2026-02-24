@@ -393,7 +393,7 @@ export const validateTemplateForSend = internalQuery({
             templateName: args.templateName,
             phoneNumberId: args.phoneNumberId,
             requestedLanguage: args.languageCode,
-            allowFallback: args.allowFallback ?? true,
+            allowFallback: args.allowFallback ?? false,
             requireScoped: args.requireScoped ?? true,
         });
         if (!resolved.ok) {
@@ -448,7 +448,7 @@ export const startProcessing = internalAction({
             ? null
             : await ctx.runQuery(internal.templates.getTemplateByName, {
                 name: campaign.templateName,
-                phoneNumberId: campaign.phoneNumberId ?? undefined,
+                phoneNumberId: campaign.phoneNumberId,
             });
         const requestedLanguage =
             campaign.templateLanguage ??
@@ -456,7 +456,7 @@ export const startProcessing = internalAction({
             scopedTemplateByName?.language;
         const precheck: any = await ctx.runAction(internal.templates.resolveTemplateForSendWithSync, {
             templateName: campaign.templateName,
-            phoneNumberId: campaign.phoneNumberId ?? undefined,
+            phoneNumberId: campaign.phoneNumberId,
             requestedLanguage,
             allowFallback: false,
             requireScoped: true,
@@ -583,10 +583,14 @@ export const processBatch = internalAction({
                 const syncMsg = syncErr instanceof Error ? syncErr.message : String(syncErr);
                 // If Meta sync fails (e.g., missing whatsapp_business_management permission),
                 // continue with cached scoped templates as long as resolver can still resolve one.
+                const selectedTemplateForSyncCheck = await ctx.runQuery(api.templates.getById, { id: campaign.templateId });
+                const requestedLanguageForSyncCheck =
+                    campaign.templateLanguage ??
+                    selectedTemplateForSyncCheck?.language;
                 const fallbackResolution: any = await ctx.runQuery(internal.templates.resolveTemplateForSend, {
                     templateName: campaign.templateName,
-                    phoneNumberId: campaign.phoneNumberId ?? undefined,
-                    requestedLanguage: undefined,
+                    phoneNumberId: campaign.phoneNumberId,
+                    requestedLanguage: requestedLanguageForSyncCheck,
                     allowFallback: false,
                     requireScoped: true,
                 });
@@ -782,7 +786,7 @@ export const sendToContact = internalAction({
             ? null
             : await ctx.runQuery(internal.templates.getTemplateByName, {
                 name: campaign.templateName,
-                phoneNumberId: campaign.phoneNumberId ?? undefined,
+                phoneNumberId: campaign.phoneNumberId,
             });
         const requestedLanguage =
             campaign.templateLanguage ??
@@ -790,7 +794,7 @@ export const sendToContact = internalAction({
             scopedTemplateByName?.language;
         let resolved: any = await ctx.runQuery(internal.templates.resolveTemplateForSend, {
             templateName: campaign.templateName,
-            phoneNumberId: campaign.phoneNumberId ?? undefined,
+            phoneNumberId: campaign.phoneNumberId,
             requestedLanguage,
             allowFallback: false,
             requireScoped: true,
@@ -880,7 +884,7 @@ export const sendToContact = internalAction({
                             : requestedLanguage;
                 const newResolved: any = await ctx.runQuery(internal.templates.resolveTemplateForSend, {
                     templateName: campaign.templateName,
-                    phoneNumberId: campaign.phoneNumberId ?? undefined,
+                    phoneNumberId: campaign.phoneNumberId,
                     requestedLanguage: retryRequestedLanguage,
                     allowFallback: false,
                     requireScoped: true,

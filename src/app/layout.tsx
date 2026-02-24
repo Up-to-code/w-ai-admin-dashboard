@@ -29,13 +29,13 @@ export default function RootLayout({
         className="antialiased font-sans"
       >
         <ConvexClientProvider>
-          <AuthProvider>
-            <ErrorBoundary>
-              <AuthErrorBoundary>
+          <ErrorBoundary>
+            <AuthErrorBoundary>
+              <AuthProvider>
                 <AuthGuard>{children}</AuthGuard>
-              </AuthErrorBoundary>
-            </ErrorBoundary>
-          </AuthProvider>
+              </AuthProvider>
+            </AuthErrorBoundary>
+          </ErrorBoundary>
         </ConvexClientProvider>
       </body>
     </html>

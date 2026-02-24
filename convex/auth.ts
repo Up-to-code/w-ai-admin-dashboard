@@ -1,4 +1,5 @@
 import { mutation, query } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { api } from "./_generated/api";
 import { PushNotifications } from "@convex-dev/expo-push-notifications";
@@ -111,9 +112,20 @@ export const verifyOTP = mutation({
 });
 
 export const getUser = query({
-  args: { userId: v.id("users") },
+  args: { userId: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db.get(args.userId);
+    // Accept any string to avoid ArgumentValidationError when a wrong-table ID
+    // (e.g. chats) was mistakenly stored as user_id in localStorage. Return null
+    // if the ID is invalid or points to a non-user document.
+    const id = args.userId?.trim();
+    if (!id || id.length !== 32) return null;
+    try {
+      const doc = await ctx.db.get(id as Id<"users">);
+      if (!doc || typeof (doc as { role?: string }).role !== "string") return null;
+      return doc;
+    } catch {
+      return null;
+    }
   },
 });
 
