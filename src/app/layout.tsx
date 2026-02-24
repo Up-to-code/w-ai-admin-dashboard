@@ -1,10 +1,17 @@
 import type { Metadata } from "next";
+import { Cairo } from "next/font/google";
 import "./globals.css";
 import ConvexClientProvider from "@/components/ConvexClientProvider";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AuthErrorBoundary } from "@/components/AuthErrorBoundary";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AuthGuard } from "@/components/AuthGuard";
+
+const cairo = Cairo({
+  subsets: ["arabic", "latin"],
+  variable: "--font-cairo",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "chatcb-UI - إدارة واتساب للأعمال",
@@ -26,7 +33,7 @@ export default function RootLayout({
   return (
     <html lang="ar" dir="rtl">
       <body
-        className="antialiased font-sans"
+        className={`${cairo.variable} antialiased font-sans`}
       >
         <ConvexClientProvider>
           <ErrorBoundary>
