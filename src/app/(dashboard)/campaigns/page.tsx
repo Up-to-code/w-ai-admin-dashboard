@@ -78,7 +78,8 @@ export default function CampaignsPage() {
   const isQuickCampaignHardBlocked =
     quickCampaignBlockingReason === "AUTH_FAILED" ||
     quickCampaignBlockingReason === "TOKEN_MISSING" ||
-    quickCampaignBlockingReason === "NUMBER_NOT_FOUND"
+    quickCampaignBlockingReason === "NUMBER_NOT_FOUND" ||
+    quickCampaignBlockingReason === "WABA_MISMATCH"
   const quickCampaignApisUnavailable = !enableExtendedCampaignApis || sendReadinessQuery.unavailable
 
   const calendarDays = useMemo(() => {

@@ -3,8 +3,10 @@ import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import {
   normalizeTemplateLanguageCode as normalizeLanguageCode,
+  type ScopedTemplateExclude,
   resolveScopedTemplateCandidate,
 } from "./templateResolution";
+import { normalizeNumericId } from "./metaNumbersSync";
 
 function extractLanguageCode(value: any): string | null {
   if (typeof value === "string") {
@@ -77,6 +79,22 @@ function normalizeMetaTemplateRecord(template: any): {
     content,
     metaTemplateId,
   };
+}
+
+async function withAppSecretProof(
+  ctx: { runAction: (...args: any[]) => Promise<any> },
+  url: URL,
+  accessToken: string
+): Promise<URL> {
+  const appSecret = process.env.WHATSAPP_APP_SECRET?.trim();
+  if (!appSecret) return url;
+  const proof = (await ctx.runAction(internal.nodeUtils.createAppSecretProof, {
+    accessToken,
+    appSecret,
+  })) as string;
+  const next = new URL(url.toString());
+  next.searchParams.set("appsecret_proof", proof);
+  return next;
 }
 
 export const list = query({
@@ -184,6 +202,8 @@ export const resolveTemplateForSend = internalQuery({
     requestedLanguage: v.optional(v.string()),
     allowFallback: v.optional(v.boolean()),
     requireScoped: v.optional(v.boolean()),
+    excludedTemplateId: v.optional(v.string()),
+    excludedLanguage: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const allowFallback = args.allowFallback ?? false;
@@ -212,8 +232,19 @@ export const resolveTemplateForSend = internalQuery({
       )
       .collect();
     const scopedApproved = scopedByName.filter((t) => t.status === "APPROVED");
+    const excluded: ScopedTemplateExclude = {
+      templateId: args.excludedTemplateId ?? null,
+      language: args.excludedLanguage ?? null,
+    };
+    const isExcluded = (template: { _id: unknown; language?: string | null }) => {
+      if (excluded.templateId && String(template._id) === String(excluded.templateId)) return true;
+      if (excluded.language) {
+        return normalizeLanguageCode(template.language) === normalizeLanguageCode(excluded.language);
+      }
+      return false;
+    };
     const scopedExact = requestedLanguage
-      ? scopedApproved.find((t) => normalizeLanguageCode(t.language) === requestedLanguage)
+      ? scopedApproved.find((t) => normalizeLanguageCode(t.language) === requestedLanguage && !isExcluded(t))
       : null;
     attempted.push({
       step: "scoped_exact",
@@ -245,7 +276,8 @@ export const resolveTemplateForSend = internalQuery({
         _creationTime: template._creationTime,
       })),
       requestedLanguage || undefined,
-      allowFallback
+      allowFallback,
+      excluded
     );
 
     const familyAttempted = !!requestedLanguage && allowFallback;
@@ -324,6 +356,8 @@ export const resolveTemplateForSendWithSync = internalAction({
     requestedLanguage: v.optional(v.string()),
     allowFallback: v.optional(v.boolean()),
     requireScoped: v.optional(v.boolean()),
+    excludedTemplateId: v.optional(v.string()),
+    excludedLanguage: v.optional(v.string()),
     failOnSyncError: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -333,6 +367,8 @@ export const resolveTemplateForSendWithSync = internalAction({
       requestedLanguage: args.requestedLanguage,
       allowFallback: args.allowFallback,
       requireScoped: args.requireScoped,
+      excludedTemplateId: args.excludedTemplateId,
+      excludedLanguage: args.excludedLanguage,
     };
     const before: any = await ctx.runQuery(internal.templates.resolveTemplateForSend, resolveArgs);
     let syncError: string | null = null;
@@ -643,6 +679,76 @@ export const syncFromMeta = action({
     }
     const numbers = await ctx.runQuery(api.whatsappNumbers.list, {});
     const selectedNumber = numbers.find((row: any) => row.businessNumberId === args.phoneNumberId);
+    if (!selectedNumber) {
+      throw new Error(`Sending number ${args.phoneNumberId} was not found in Integrations.`);
+    }
+    const configuredWabaId = normalizeNumericId(selectedNumber.businessAccountId);
+    if (!configuredWabaId) {
+      await ctx.runMutation(internal.whatsappNumbers.clearWabaValidation, {
+        businessNumberId: args.phoneNumberId,
+      });
+      throw new Error("Missing or invalid WABA ID for this number. Update Integrations and retry sync.");
+    }
+    const numberRow = await ctx.runQuery(internal.whatsappNumbers.getByBusinessNumberId, {
+      businessNumberId: args.phoneNumberId,
+    });
+    const accessToken = numberRow?.accessToken?.trim();
+    if (!accessToken) {
+      await ctx.runMutation(internal.whatsappNumbers.clearWabaValidation, {
+        businessNumberId: args.phoneNumberId,
+      });
+      throw new Error("Missing access token for this number. Reconnect token in Integrations and retry sync.");
+    }
+
+    const foundWabaPhoneIds = new Set<string>();
+    let nextUrl: URL | null = new URL(`https://graph.facebook.com/v21.0/${configuredWabaId}/phone_numbers`);
+    nextUrl.searchParams.set("fields", "id");
+    nextUrl.searchParams.set("limit", "100");
+
+    while (nextUrl) {
+      const requestUrl = await withAppSecretProof(ctx, nextUrl, accessToken);
+      const response = await fetch(requestUrl.toString(), {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      const body: any = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const errorMessage =
+          typeof body?.error?.message === "string"
+            ? body.error.message
+            : `HTTP ${response.status}`;
+        await ctx.runMutation(internal.whatsappNumbers.clearWabaValidation, {
+          businessNumberId: args.phoneNumberId,
+        });
+        throw new Error(
+          `Failed to validate number/WABA binding for ${args.phoneNumberId}: ${errorMessage}`
+        );
+      }
+      const rows = Array.isArray(body?.data) ? body.data : [];
+      for (const row of rows) {
+        const id = normalizeNumericId(typeof row?.id === "string" ? row.id : String(row?.id ?? ""));
+        if (id) foundWabaPhoneIds.add(id);
+      }
+      const pagingNext = typeof body?.paging?.next === "string" ? body.paging.next : null;
+      nextUrl = pagingNext ? new URL(pagingNext) : null;
+    }
+
+    if (!foundWabaPhoneIds.has(normalizeNumericId(args.phoneNumberId))) {
+      const mismatchError =
+        `[WABA_MISMATCH] Number ${args.phoneNumberId} is not a member of configured WABA ${configuredWabaId}. ` +
+        "Update Integrations mapping, then sync templates again.";
+      await ctx.runMutation(internal.whatsappNumbers.markWabaValidationMismatch, {
+        businessNumberId: args.phoneNumberId,
+        error: mismatchError,
+      });
+      throw new Error(mismatchError);
+    }
+    await ctx.runMutation(internal.whatsappNumbers.markWabaValidationValid, {
+      businessNumberId: args.phoneNumberId,
+    });
+
     if (selectedNumber?.businessAccountId) {
       const sharingSameWaba = numbers.filter(
         (row: any) => row.businessAccountId === selectedNumber.businessAccountId

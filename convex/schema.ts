@@ -35,6 +35,13 @@ export default defineSchema({
     lastAuthErrorCode: v.optional(v.number()),
     lastAuthErrorMessage: v.optional(v.string()),
     lastAuthErrorAt: v.optional(v.number()),
+    wabaValidationStatus: v.optional(v.union(
+      v.literal("valid"),
+      v.literal("mismatch"),
+      v.literal("unknown")
+    )),
+    lastWabaValidationAt: v.optional(v.number()),
+    lastWabaValidationError: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_business_number_id", ["businessNumberId"]),
 
@@ -447,6 +454,13 @@ export default defineSchema({
     lastAuthErrorCode: v.optional(v.number()),
     lastAuthErrorMessage: v.optional(v.string()),
     lastAuthErrorAt: v.optional(v.number()),
+    wabaValidationStatus: v.optional(v.union(
+      v.literal("valid"),
+      v.literal("mismatch"),
+      v.literal("unknown")
+    )),
+    lastWabaValidationAt: v.optional(v.number()),
+    lastWabaValidationError: v.optional(v.string()),
     isActive: v.optional(v.boolean()),
     createdAt: v.number(),
     updatedAt: v.number(),

@@ -59,4 +59,31 @@ describe("mock campaign create across numbers for test contact 201015638178", ()
       expect(createdForNumber?.audienceCount).toBe(1);
     }
   });
+
+  it("returns WABA_MISMATCH readiness when a number is marked mismatched", async () => {
+    const numbers = (resolveQuery({ __path: "whatsappNumbers.list" }, {}) ?? []) as Array<{
+      _id: string;
+      businessNumberId: string;
+      wabaValidationStatus?: "valid" | "mismatch" | "unknown";
+    }>;
+    const target = numbers[0];
+    expect(target?._id).toBeTruthy();
+
+    await resolveMutation(
+      { __path: "whatsappNumbers.update" },
+      { id: target._id, wabaValidationStatus: "mismatch" }
+    );
+
+    const readiness = resolveQuery(
+      { __path: "campaigns.getSendReadiness" },
+      { phoneNumberId: target.businessNumberId }
+    ) as { blockingReason?: string | null; ready?: boolean };
+    expect(readiness.ready).toBe(false);
+    expect(readiness.blockingReason).toBe("WABA_MISMATCH");
+
+    await resolveMutation(
+      { __path: "whatsappNumbers.update" },
+      { id: target._id, wabaValidationStatus: "valid" }
+    );
+  });
 });

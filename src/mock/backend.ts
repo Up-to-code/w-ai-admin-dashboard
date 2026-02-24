@@ -10,6 +10,7 @@ type PhoneNumber = {
   businessAccountId: string;
   isActive?: boolean;
   tokenStatus?: "connected" | "auth_failed";
+  wabaValidationStatus?: "valid" | "mismatch" | "unknown";
 };
 
 type User = {
@@ -93,6 +94,7 @@ const phoneNumbers: PhoneNumber[] = [
     businessAccountId: "ba_001",
     isActive: true,
     tokenStatus: "connected",
+    wabaValidationStatus: "valid",
   },
   {
     _id: "pn_test",
@@ -102,6 +104,7 @@ const phoneNumbers: PhoneNumber[] = [
     businessAccountId: "ba_002",
     isActive: true,
     tokenStatus: "connected",
+    wabaValidationStatus: "valid",
   },
 ];
 
@@ -611,6 +614,15 @@ export function resolveQuery(ref: any, args?: any): any {
       }
       if (tokenStatus === "auth_failed") {
         return { ready: false, tokenStatus, scopedApprovedCount, blockingReason: "AUTH_BLOCKED", recommendedAction: "أعد ربط الرقم من التكاملات" };
+      }
+      if (pn?.wabaValidationStatus === "mismatch") {
+        return {
+          ready: false,
+          tokenStatus,
+          scopedApprovedCount,
+          blockingReason: "WABA_MISMATCH",
+          recommendedAction: "تأكد من ربط الرقم مع WABA الصحيح في التكاملات ثم أعد مزامنة القوالب",
+        };
       }
       if (scopedApprovedCount === 0) {
         return { ready: false, tokenStatus, scopedApprovedCount, blockingReason: "NO_SCOPED_TEMPLATES", recommendedAction: "قم بمزامنة القوالب" };

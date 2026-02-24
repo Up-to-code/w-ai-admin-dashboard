@@ -258,7 +258,13 @@ export const getSendReadiness = query({
             number?.tokenStatus ??
             (hasToken ? "connected" : "missing");
 
-        let blockingReason: "NUMBER_NOT_FOUND" | "TOKEN_MISSING" | "AUTH_FAILED" | "NO_SCOPED_TEMPLATES" | null = null;
+        let blockingReason:
+            | "NUMBER_NOT_FOUND"
+            | "TOKEN_MISSING"
+            | "AUTH_FAILED"
+            | "WABA_MISMATCH"
+            | "NO_SCOPED_TEMPLATES"
+            | null = null;
         let recommendedAction = "Ready to send.";
 
         if (!number) {
@@ -271,6 +277,10 @@ export const getSendReadiness = query({
             blockingReason = "AUTH_FAILED";
             recommendedAction =
                 "Reconnect this number in Integrations and replace the access token from the active Meta app.";
+        } else if (number.wabaValidationStatus === "mismatch") {
+            blockingReason = "WABA_MISMATCH";
+            recommendedAction =
+                "Mismatch between sending number and configured WABA. Fix Integrations mapping, then sync templates again.";
         } else if (scopedApprovedCount === 0) {
             blockingReason = "NO_SCOPED_TEMPLATES";
             recommendedAction = "Sync templates from Meta for this number, then pick an approved scoped template.";
@@ -281,6 +291,9 @@ export const getSendReadiness = query({
             phoneNumberId: args.phoneNumberId,
             phoneNumberName: number?.name ?? null,
             tokenStatus,
+            wabaValidationStatus: number?.wabaValidationStatus ?? "unknown",
+            lastWabaValidationAt: number?.lastWabaValidationAt ?? null,
+            lastWabaValidationError: number?.lastWabaValidationError ?? null,
             scopedApprovedCount,
             blockingReason,
             recommendedAction,
@@ -430,6 +443,24 @@ export const startProcessing = internalAction({
                 reasonCode: "PHONE_NUMBER_REQUIRED",
                 resolutionMode: null,
                 campaignId: args.campaignId,
+            });
+            await ctx.runMutation(internal.campaigns.failCampaignForInvalidTemplate, {
+                campaignId: args.campaignId,
+                reason,
+            });
+            return;
+        }
+        const number = await ctx.runQuery(internal.whatsappNumbers.getByBusinessNumberId, {
+            businessNumberId: campaign.phoneNumberId,
+        });
+        if (number?.wabaValidationStatus === "mismatch") {
+            const reason =
+                `[WABA_MISMATCH] Number ${campaign.phoneNumberId} has a WABA binding mismatch. ` +
+                `Fix Integrations mapping and re-sync templates before sending. campaignId="${args.campaignId}"`;
+            logError("[WABA_MISMATCH][Campaign][Start] Blocking campaign start", {
+                campaignId: args.campaignId,
+                phoneNumberId: campaign.phoneNumberId,
+                lastWabaValidationError: number.lastWabaValidationError ?? null,
             });
             await ctx.runMutation(internal.campaigns.failCampaignForInvalidTemplate, {
                 campaignId: args.campaignId,
@@ -728,6 +759,30 @@ export const sendToContact = internalAction({
             });
             return;
         }
+        const number = await ctx.runQuery(internal.whatsappNumbers.getByBusinessNumberId, {
+            businessNumberId: campaign.phoneNumberId,
+        });
+        if (number?.wabaValidationStatus === "mismatch") {
+            const reason =
+                `[WABA_MISMATCH] Number ${campaign.phoneNumberId} has a WABA binding mismatch. ` +
+                `Fix Integrations mapping and re-sync templates before sending. campaignId="${args.campaignId}"`;
+            await ctx.runMutation(internal.campaigns.logBatchResults, {
+                campaignId: args.campaignId,
+                logs: [{
+                    contactId: args.contactId,
+                    status: "failed",
+                    error: reason,
+                }],
+            });
+            await ctx.runMutation(internal.campaigns.failCampaignForInvalidTemplate, {
+                campaignId: args.campaignId,
+                reason,
+            });
+            await ctx.runMutation(internal.campaigns.finalizeCampaignIfDone, {
+                campaignId: args.campaignId,
+            });
+            return;
+        }
 
         // Anti-spam: Check if contact was recently messaged
         const config = {
@@ -863,7 +918,9 @@ export const sendToContact = internalAction({
             logWarn(`[Campaign] Template ${campaign.templateName} status is ${template.status}, may fail to send`);
         }
 
-        let failedLanguage132001: string | null = null;
+        let failedCandidate132001:
+            | { templateId?: string; language?: string | null }
+            | null = null;
         for (let attempt = 1; attempt <= 2; attempt++) {
             // On second attempt (after 132001): sync from Meta and re-resolve with fallback; retry send only if resolution changed.
             if (attempt === 2) {
@@ -872,20 +929,17 @@ export const sendToContact = internalAction({
                 } catch (syncErr) {
                     logWarn("[Campaign] Sync during 132001 retry failed", { campaignId: args.campaignId, error: syncErr instanceof Error ? syncErr.message : String(syncErr) });
                 }
-                // Prefer a different language on retry when Send API rejected the previous one (e.g. "does not exist in ar").
-                const failedLang = (failedLanguage132001 ?? "").trim().toLowerCase().split(/[-_]/)[0];
-                const retryRequestedLanguage =
-                    failedLang === "ar"
-                        ? "en"
-                        : failedLang === "en"
-                            ? "ar"
-                            : requestedLanguage;
                 const newResolved: any = await ctx.runQuery(internal.templates.resolveTemplateForSend, {
                     templateName: campaign.templateName,
                     phoneNumberId: campaign.phoneNumberId,
-                    requestedLanguage: retryRequestedLanguage,
+                    requestedLanguage,
                     allowFallback: true,
                     requireScoped: true,
+                    excludedTemplateId: failedCandidate132001?.templateId,
+                    excludedLanguage:
+                        failedCandidate132001?.templateId
+                            ? undefined
+                            : (failedCandidate132001?.language ?? undefined),
                 });
                 if (!newResolved.ok || (newResolved.selected.templateId === resolved.selected.templateId && newResolved.selected.language === resolved.selected.language)) {
                     // No change or failed; log and finalize then exit loop (contact remains failed)
@@ -1509,11 +1563,17 @@ export const sendToContact = internalAction({
                 } else if (code === 132001 || (err as { code?: unknown }).code == 132001 || err.category === "INVALID_TEMPLATE") {
                     err.retryable = false;
                     if (attempt === 1) {
-                        failedLanguage132001 = resolved.selected?.language ?? requestedLanguage ?? null;
-                        logDebug("[Campaign] 132001/INVALID_TEMPLATE on first attempt; will sync and retry with fallback", {
+                        const failedTemplateId = resolved.selected?.templateId
+                            ? String(resolved.selected.templateId)
+                            : undefined;
+                        failedCandidate132001 = {
+                            templateId: failedTemplateId,
+                            language: resolved.selected?.language ?? requestedLanguage ?? null,
+                        };
+                        logDebug("[Campaign] 132001/INVALID_TEMPLATE on first attempt; will sync and retry with resolver exclusion", {
                             contactId: args.contactId,
                             campaignId: args.campaignId,
-                            failedLanguage: failedLanguage132001,
+                            failedCandidate: failedCandidate132001,
                         });
                         continue;
                     }
@@ -1536,20 +1596,6 @@ export const sendToContact = internalAction({
                         campaignId: args.campaignId,
                         reason: invalidTemplateReason,
                     });
-                    if (resolved?.selected?.templateId) {
-                        try {
-                            await ctx.runMutation(internal.templates.updateStatusById, {
-                                id: resolved.selected.templateId,
-                                status: "REJECTED",
-                            });
-                        } catch (markError) {
-                            logWarn("[Campaign] Failed to mark template as REJECTED after 132001", {
-                                templateId: resolved.selected.templateId,
-                                campaignId: args.campaignId,
-                                error: markError instanceof Error ? markError.message : String(markError),
-                            });
-                        }
-                    }
                 } else if (code === 80005 || code === 200) {
                     // Rate limit error - these are retryable
                     logWarn(`[Campaign] Retryable error (${code}) for contact ${args.contactId}: ${errorMsg}`);

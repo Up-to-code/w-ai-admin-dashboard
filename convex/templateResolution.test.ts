@@ -53,4 +53,34 @@ describe("template resolution helpers", () => {
     expect(result.mode).toBeNull();
     expect(result.selected).toBeNull();
   });
+
+  it("excludes failed candidate and picks next best language-family match", () => {
+    const templates = [candidate("failed", "ar_EG", 20), candidate("alt", "ar", 10)];
+    const result = resolveScopedTemplateCandidate(templates, "ar", true, {
+      templateId: "failed",
+      language: "ar_EG",
+    });
+    expect(result.mode).toBe("scoped_exact");
+    expect(result.selected?._id).toBe("alt");
+  });
+
+  it("keeps language-family fallback working when excluded template id differs", () => {
+    const templates = [candidate("a", "ar_SA", 20), candidate("b", "en_US", 10)];
+    const result = resolveScopedTemplateCandidate(templates, "ar", true, {
+      templateId: "unrelated",
+      language: "de",
+    });
+    expect(result.mode).toBe("scoped_language_family");
+    expect(result.selected?._id).toBe("a");
+  });
+
+  it("returns null when exclusions remove all candidates", () => {
+    const templates = [candidate("a", "ar", 10)];
+    const result = resolveScopedTemplateCandidate(templates, "ar", true, {
+      templateId: "a",
+      language: "ar",
+    });
+    expect(result.mode).toBeNull();
+    expect(result.selected).toBeNull();
+  });
 });

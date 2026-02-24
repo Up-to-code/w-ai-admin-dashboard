@@ -6,6 +6,7 @@ import { buildMetaSyncPlan, normalizeNumericId } from "./metaNumbersSync";
 
 const SEED_PLACEHOLDER = "from_env";
 const UNKNOWN_WABA_PLACEHOLDER = "unknown_waba";
+type WabaValidationStatus = "valid" | "mismatch" | "unknown";
 
 function normalizeOptionalText(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -51,6 +52,9 @@ export const add = mutation({
       lastAuthErrorCode: undefined,
       lastAuthErrorMessage: undefined,
       lastAuthErrorAt: undefined,
+      wabaValidationStatus: "unknown" as WabaValidationStatus,
+      lastWabaValidationAt: undefined,
+      lastWabaValidationError: undefined,
       createdAt: Date.now(),
     });
     await ctx.runMutation(api.agents.ensureForPhoneNumber, {
@@ -97,6 +101,64 @@ export const markAuthHealthy = internalMutation({
       lastAuthErrorCode: undefined,
       lastAuthErrorMessage: undefined,
       lastAuthErrorAt: undefined,
+    });
+    return { updated: true as const };
+  },
+});
+
+export const markWabaValidationValid = internalMutation({
+  args: {
+    businessNumberId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("whatsapp_numbers")
+      .withIndex("by_business_number_id", (q) => q.eq("businessNumberId", args.businessNumberId))
+      .first();
+    if (!row) return { updated: false as const };
+    await ctx.db.patch(row._id, {
+      wabaValidationStatus: "valid",
+      lastWabaValidationAt: Date.now(),
+      lastWabaValidationError: undefined,
+    });
+    return { updated: true as const };
+  },
+});
+
+export const markWabaValidationMismatch = internalMutation({
+  args: {
+    businessNumberId: v.string(),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("whatsapp_numbers")
+      .withIndex("by_business_number_id", (q) => q.eq("businessNumberId", args.businessNumberId))
+      .first();
+    if (!row) return { updated: false as const };
+    await ctx.db.patch(row._id, {
+      wabaValidationStatus: "mismatch",
+      lastWabaValidationAt: Date.now(),
+      lastWabaValidationError: args.error ?? "WABA mismatch",
+    });
+    return { updated: true as const };
+  },
+});
+
+export const clearWabaValidation = internalMutation({
+  args: {
+    businessNumberId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("whatsapp_numbers")
+      .withIndex("by_business_number_id", (q) => q.eq("businessNumberId", args.businessNumberId))
+      .first();
+    if (!row) return { updated: false as const };
+    await ctx.db.patch(row._id, {
+      wabaValidationStatus: "unknown",
+      lastWabaValidationAt: Date.now(),
+      lastWabaValidationError: undefined,
     });
     return { updated: true as const };
   },
@@ -154,11 +216,17 @@ export const upsertFromWebhookMetadata = internalMutation({
         phone?: string;
         name?: string;
         businessAccountId?: string;
+        wabaValidationStatus?: WabaValidationStatus;
+        lastWabaValidationAt?: number;
+        lastWabaValidationError?: string;
       } = {};
       if (displayPhone && displayPhone !== existing.phone) patch.phone = displayPhone;
       if (verifiedName && verifiedName !== existing.name) patch.name = verifiedName;
       if (businessAccountId && businessAccountId !== existing.businessAccountId) {
         patch.businessAccountId = businessAccountId;
+        patch.wabaValidationStatus = "unknown";
+        patch.lastWabaValidationAt = Date.now();
+        patch.lastWabaValidationError = undefined;
       }
       if (Object.keys(patch).length > 0) {
         await ctx.db.patch(existing._id, patch);
@@ -171,6 +239,9 @@ export const upsertFromWebhookMetadata = internalMutation({
       businessNumberId: normalizedBusinessNumberId,
       phone: displayPhone,
       name: verifiedName,
+      wabaValidationStatus: "unknown" as WabaValidationStatus,
+      lastWabaValidationAt: undefined,
+      lastWabaValidationError: undefined,
       createdAt: Date.now(),
     });
     await ctx.runMutation(api.agents.ensureForPhoneNumber, {
@@ -202,12 +273,18 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     const { id, ...updates } = args;
+    const existing = await ctx.db.get(id);
+    if (!existing) throw new Error("Number not found.");
     const filtered: Record<string, unknown> = {};
+    let shouldResetWabaValidation = false;
     if (updates.name !== undefined) filtered.name = updates.name;
     if (updates.phone !== undefined) filtered.phone = updates.phone;
     if (updates.businessAccountId !== undefined) {
       const waba = updates.businessAccountId?.trim();
       filtered.businessAccountId = waba && waba.length > 0 ? waba : undefined;
+      if (existing.businessAccountId !== filtered.businessAccountId) {
+        shouldResetWabaValidation = true;
+      }
     }
     if (updates.accessToken !== undefined) {
       const t = updates.accessToken?.trim();
@@ -216,6 +293,14 @@ export const update = mutation({
       filtered.lastAuthErrorCode = undefined;
       filtered.lastAuthErrorMessage = undefined;
       filtered.lastAuthErrorAt = undefined;
+      if ((existing.accessToken ?? undefined) !== filtered.accessToken) {
+        shouldResetWabaValidation = true;
+      }
+    }
+    if (shouldResetWabaValidation) {
+      filtered.wabaValidationStatus = "unknown";
+      filtered.lastWabaValidationAt = Date.now();
+      filtered.lastWabaValidationError = undefined;
     }
     if (Object.keys(filtered).length === 0) return id;
     await ctx.db.patch(id, filtered);
@@ -255,6 +340,9 @@ export const seedFromEnv = mutation({
       businessNumberId: phoneId,
       phone: phoneId,
       name: "رقم واتساب الرئيسي",
+      wabaValidationStatus: "unknown" as WabaValidationStatus,
+      lastWabaValidationAt: undefined,
+      lastWabaValidationError: undefined,
       createdAt: Date.now(),
     });
     await ctx.runMutation(api.agents.ensureForPhoneNumber, {
@@ -277,6 +365,9 @@ type WhatsAppNumberRow = {
   phone: string;
   name: string;
   accessToken?: string;
+  wabaValidationStatus?: WabaValidationStatus;
+  lastWabaValidationAt?: number;
+  lastWabaValidationError?: string;
 };
 
 function normalizeToken(value: string | null | undefined): string | null {

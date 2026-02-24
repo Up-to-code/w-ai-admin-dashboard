@@ -63,7 +63,8 @@ export function ChatInput({ chatId }: ChatInputProps) {
   const isTemplateReadinessHardBlocked =
     readinessBlockingReason === "AUTH_FAILED" ||
     readinessBlockingReason === "TOKEN_MISSING" ||
-    readinessBlockingReason === "NUMBER_NOT_FOUND"
+    readinessBlockingReason === "NUMBER_NOT_FOUND" ||
+    readinessBlockingReason === "WABA_MISMATCH"
   const readinessBlockingMessage =
     isTemplateReadinessHardBlocked
       ? (sendReadiness?.recommendedAction as string | undefined) ||

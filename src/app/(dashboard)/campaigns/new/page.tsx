@@ -91,6 +91,8 @@ function mapResultReasonToArabic(reason: string): string {
             return "رمز الوصول مفقود لهذا الرقم"
         case "AUTH_FAILED":
             return "فشل المصادقة لهذا الرقم"
+        case "WABA_MISMATCH":
+            return "عدم تطابق بين الرقم وحساب WABA لهذا الرقم"
         case "TEMPLATE_NOT_AVAILABLE_FOR_NUMBER":
             return "القالب غير متاح لهذا الرقم"
         case "CREATE_VALIDATION_ERROR":
@@ -207,7 +209,8 @@ export default function NewCampaignPage() {
     const isTemplateReadinessHardBlocked =
         readinessBlockingReason === "AUTH_FAILED" ||
         readinessBlockingReason === "TOKEN_MISSING" ||
-        readinessBlockingReason === "NUMBER_NOT_FOUND"
+        readinessBlockingReason === "NUMBER_NOT_FOUND" ||
+        readinessBlockingReason === "WABA_MISMATCH"
     const readinessBlockingMessage =
         isTemplateReadinessHardBlocked
             ? (sendReadiness?.recommendedAction as string | undefined) ||
@@ -500,6 +503,15 @@ export default function NewCampaignPage() {
                             phoneNumberId,
                             status: "skipped",
                             reason: "AUTH_FAILED",
+                            downgradedTestMode: downgradeTestMode,
+                        })
+                        continue
+                    }
+                    if (blockingReason === "WABA_MISMATCH") {
+                        results.push({
+                            phoneNumberId,
+                            status: "skipped",
+                            reason: "WABA_MISMATCH",
                             downgradedTestMode: downgradeTestMode,
                         })
                         continue

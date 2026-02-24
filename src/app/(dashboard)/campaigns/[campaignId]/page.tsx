@@ -41,6 +41,18 @@ import React, { useState } from "react"
 
 type StatusFilter = "all" | "sent" | "delivered" | "read" | "failed" | "skipped"
 
+function diagnoseCampaignErrorArabic(error: string | null | undefined): string | null {
+  const value = String(error ?? "").trim()
+  if (!value) return null
+  if (value.includes("[WABA_MISMATCH]")) {
+    return "تعذر الإرسال بسبب عدم تطابق إعداد الرقم مع حساب WABA. راجع الربط في التكاملات ثم أعد مزامنة القوالب."
+  }
+  if (value.includes("[INVALID_TEMPLATE_PRECHECK] INVALID_TEMPLATE")) {
+    return "القالب أو اللغة المحددة غير صالحة لهذا الرقم المرسل. اختر لغة/قالب معتمد لهذا الرقم ثم أعد المحاولة."
+  }
+  return null
+}
+
 export default function CampaignDetailPage() {
   const params = useParams()
   const router = useRouter()
@@ -101,6 +113,8 @@ export default function CampaignDetailPage() {
     skipRecentlyContacted: campaign.sendingConfig?.skipRecentlyContacted ?? true,
     recentContactHours: campaign.sendingConfig?.recentContactHours ?? 24,
   }
+  const firstFailedLogWithError = campaignLogs?.find((log) => Boolean(log.error))
+  const failedDiagnosticText = diagnoseCampaignErrorArabic(firstFailedLogWithError?.error)
 
   return (
     <div className="space-y-8 p-6 sm:p-8 animate-in fade-in duration-500 max-w-[1600px] mx-auto">
@@ -303,7 +317,8 @@ export default function CampaignDetailPage() {
                     </CardHeader>
                     <CardContent>
                         <p className="text-sm text-muted-foreground">
-                            واجهت الحملة أخطاء أثناء الإرسال. يرجى مراجعة سجلات النظام أو التأكد من رصيد الرسائل وحالة القالب.
+                            {failedDiagnosticText ??
+                              "واجهت الحملة أخطاء أثناء الإرسال. يرجى مراجعة سجلات النظام أو التأكد من رصيد الرسائل وحالة القالب."}
                         </p>
                     </CardContent>
                 </Card>
@@ -399,7 +414,9 @@ export default function CampaignDetailPage() {
                 <TableBody>
                   {campaignLogs
                     .filter(log => statusFilter === "all" || log.status === statusFilter)
-                    .map((log) => (
+                    .map((log) => {
+                      const errorDiagnosis = diagnoseCampaignErrorArabic(log.error)
+                      return (
                       <TableRow key={String(log._id)}>
                         <TableCell className="font-medium">
                           <div className="flex items-center gap-2">
@@ -449,9 +466,15 @@ export default function CampaignDetailPage() {
                         </TableCell>
                         <TableCell>
                           {log.error ? (
-                            <span className="text-destructive text-sm" title={log.error}>
-                              {log.error.length > 30 ? log.error.slice(0, 30) + "..." : log.error}
-                            </span>
+                            errorDiagnosis ? (
+                              <span className="text-destructive text-sm" title={log.error}>
+                                {errorDiagnosis}
+                              </span>
+                            ) : (
+                              <span className="text-destructive text-sm" title={log.error}>
+                                {log.error.length > 30 ? log.error.slice(0, 30) + "..." : log.error}
+                              </span>
+                            )
                           ) : log.status === "skipped" && log.skipReason ? (
                             <span className="text-yellow-600 text-sm">
                               {log.skipReason === "recently_contacted" && "تم التواصل مؤخراً"}
@@ -463,7 +486,8 @@ export default function CampaignDetailPage() {
                           )}
                         </TableCell>
                       </TableRow>
-                    ))}
+                      )
+                    })}
                 </TableBody>
               </Table>
               {campaignLogs.filter(log => statusFilter === "all" || log.status === statusFilter).length === 0 && (

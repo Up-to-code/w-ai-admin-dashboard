@@ -13,6 +13,11 @@ export type ScopedResolutionMode =
   | "scoped_language_family"
   | "scoped_latest";
 
+export type ScopedTemplateExclude = {
+  templateId?: string | null;
+  language?: string | null;
+};
+
 export function normalizeTemplateLanguageCode(lang: string | undefined | null): string {
   return String(lang ?? "").trim().toLowerCase().replace("-", "_");
 }
@@ -33,16 +38,35 @@ function latestTemplate(templates: readonly ScopedTemplateCandidate[]): ScopedTe
     .sort((a, b) => templateRecency(b) - templateRecency(a))[0] ?? null;
 }
 
+function isExcludedTemplate(
+  template: ScopedTemplateCandidate,
+  excluded?: ScopedTemplateExclude
+): boolean {
+  if (!excluded) return false;
+  if (excluded.templateId && String(template._id) === String(excluded.templateId)) {
+    return true;
+  }
+  if (excluded.language) {
+    const excludedLanguage = normalizeTemplateLanguageCode(excluded.language);
+    if (excludedLanguage && normalizeTemplateLanguageCode(template.language) === excludedLanguage) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function resolveScopedTemplateCandidate(
   scopedApproved: readonly ScopedTemplateCandidate[],
   requestedLanguage: string | undefined | null,
-  allowFallback: boolean
+  allowFallback: boolean,
+  excluded?: ScopedTemplateExclude
 ): { selected: ScopedTemplateCandidate | null; mode: ScopedResolutionMode | null } {
   const requested = normalizeTemplateLanguageCode(requestedLanguage);
+  const available = scopedApproved.filter((template) => !isExcludedTemplate(template, excluded));
 
   if (requested) {
     const exact = latestTemplate(
-      scopedApproved.filter((template) => normalizeTemplateLanguageCode(template.language) === requested)
+      available.filter((template) => normalizeTemplateLanguageCode(template.language) === requested)
     );
     if (exact) {
       return { selected: exact, mode: "scoped_exact" };
@@ -53,16 +77,16 @@ export function resolveScopedTemplateCandidate(
     const requestedFamily = languageFamily(requested);
     const familyMatch = requestedFamily
       ? latestTemplate(
-          scopedApproved.filter((template) => languageFamily(template.language) === requestedFamily)
+          available.filter((template) => languageFamily(template.language) === requestedFamily)
         )
       : null;
     if (familyMatch) {
       return { selected: familyMatch, mode: "scoped_language_family" };
     }
 
-    return { selected: latestTemplate(scopedApproved), mode: scopedApproved.length ? "scoped_latest" : null };
+    return { selected: latestTemplate(available), mode: available.length ? "scoped_latest" : null };
   }
 
   if (!allowFallback) return { selected: null, mode: null };
-  return { selected: latestTemplate(scopedApproved), mode: scopedApproved.length ? "scoped_latest" : null };
+  return { selected: latestTemplate(available), mode: available.length ? "scoped_latest" : null };
 }
