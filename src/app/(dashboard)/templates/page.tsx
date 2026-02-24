@@ -54,12 +54,25 @@ export default function TemplatesPage() {
         enableExtendedCampaignApis && effectivePhoneNumberId ? { phoneNumberId: effectivePhoneNumberId } : "skip",
         enableExtendedCampaignApis
     )
+    const sendReadinessQuery = useOptionalConvexQuery<any>(
+        (api as any).campaigns.getSendReadiness,
+        enableExtendedCampaignApis && effectivePhoneNumberId ? { phoneNumberId: effectivePhoneNumberId } : "skip",
+        enableExtendedCampaignApis
+    )
     const templateHealth = templateHealthQuery.data
+    const sendReadiness = sendReadinessQuery.data
     const templates =
         useQuery(api.templates.list, effectivePhoneNumberId ? { phoneNumberId: effectivePhoneNumberId } : "skip") as Doc<"templates">[] | undefined
     const templatesList = templates ?? []
     const isTokenAuthFailed = templateHealth?.tokenStatus === "auth_failed"
     const tokenAuthFailedMessage = templateHealth?.lastAuthErrorMessage as string | undefined
+    const readinessBlockingReason = sendReadiness?.blockingReason as string | null | undefined
+    const isReadinessHardBlocked =
+        readinessBlockingReason === "AUTH_FAILED" ||
+        readinessBlockingReason === "TOKEN_MISSING" ||
+        readinessBlockingReason === "NUMBER_NOT_FOUND" ||
+        readinessBlockingReason === "WABA_MISMATCH"
+    const readinessBlockingMessage = (sendReadiness?.recommendedAction as string | undefined) ?? null
 
     const [search, setSearch] = useState("")
     const [activeTab, setActiveTab] = useState("all")
@@ -83,12 +96,28 @@ export default function TemplatesPage() {
             showToast("error", "لا يمكن مزامنة القوالب حتى إعادة ربط Access Token لهذا الرقم.")
             return
         }
+        if (isReadinessHardBlocked) {
+            showToast(
+                "error",
+                readinessBlockingMessage ||
+                "الرقم غير جاهز للمزامنة حالياً. أصلح إعدادات التكاملات ثم أعد المحاولة."
+            )
+            return
+        }
         setIsSyncing(true)
         try {
             const syncResult = await runConvexActionSafe(syncFromMeta as any, { phoneNumberId: effectivePhoneNumberId }, {
                 actionName: "templates:syncFromMeta",
             })
             if (!syncResult.ok) {
+                const syncMessage = String(syncResult.message ?? "")
+                if (syncMessage.includes("[WABA_MISMATCH]")) {
+                    showToast(
+                        "error",
+                        "لا يمكن مزامنة القوالب: هذا الرقم غير مرتبط بحساب WABA المهيأ. عدّل الربط في التكاملات ثم أعد المزامنة."
+                    )
+                    return
+                }
                 showToast(
                     "error",
                     syncResult.unavailable
@@ -108,7 +137,6 @@ export default function TemplatesPage() {
                 `تمت مزامنة ${fetched} قالب (تحديث/إضافة: ${upserted}، حذف محلي: ${deleted}، إزالة مكرر: ${deduped}، إزالة قديم عام: ${removedGlobal}).`
             )
         } catch (error) {
-            console.error("Sync failed:", error)
             const message = error instanceof Error ? error.message : "فشل في المزامنة"
             showToast("error", message)
         } finally {
@@ -196,7 +224,12 @@ export default function TemplatesPage() {
                             متجر القوالب
                         </Button>
                     </Link>
-                    <Button variant="outline" className="gap-2" onClick={handleSync} disabled={!effectivePhoneNumberId || isSyncing || isTokenAuthFailed}>
+                    <Button
+                        variant="outline"
+                        className="gap-2"
+                        onClick={handleSync}
+                        disabled={!effectivePhoneNumberId || isSyncing || isTokenAuthFailed || isReadinessHardBlocked}
+                    >
                         <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
                         مزامنة
                     </Button>
@@ -258,6 +291,16 @@ export default function TemplatesPage() {
                     </div>
                 </div>
             )}
+            {isReadinessHardBlocked && !isTokenAuthFailed && (
+                <div className="rounded-lg border border-amber-300/50 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-900/20 dark:text-amber-300">
+                    {readinessBlockingMessage || "لا يمكن مزامنة القوالب لهذا الرقم حتى إصلاح حالة الجاهزية."}
+                    <div className="mt-2">
+                        <Link href="/integrations" className="underline underline-offset-2">
+                            فتح الإعدادات والربط
+                        </Link>
+                    </div>
+                </div>
+            )}
             {enableExtendedCampaignApis && templateHealthQuery.unavailable && (
                 <div className="rounded-lg border border-amber-300/50 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-900/20 dark:text-amber-300">
                     معلومات صحة القوالب غير متاحة في نسخة Convex الحالية. يمكنك المتابعة بالمزامنة والإدارة من هذه الصفحة.
@@ -296,7 +339,13 @@ export default function TemplatesPage() {
                         ابدأ بإنشاء قالبك الأول للتواصل مع عملائك.
                     </p>
                     <div className="flex gap-4">
-                        <Button variant="outline" onClick={handleSync}>مزامنة من Meta</Button>
+                        <Button
+                            variant="outline"
+                            onClick={handleSync}
+                            disabled={!effectivePhoneNumberId || isSyncing || isTokenAuthFailed || isReadinessHardBlocked}
+                        >
+                            مزامنة من Meta
+                        </Button>
                         <Link href="/templates/new">
                             <Button>إنشاء قالب</Button>
                         </Link>
