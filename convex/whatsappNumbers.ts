@@ -164,6 +164,32 @@ export const clearWabaValidation = internalMutation({
   },
 });
 
+export const rebindBusinessNumberToWaba = internalMutation({
+  args: {
+    businessNumberId: v.string(),
+    businessAccountId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const normalizedBusinessNumberId = normalizeNumericId(args.businessNumberId);
+    const normalizedWabaId = normalizeNumericId(args.businessAccountId);
+    if (!normalizedBusinessNumberId || !normalizedWabaId) {
+      return { updated: false as const };
+    }
+    const row = await ctx.db
+      .query("whatsapp_numbers")
+      .withIndex("by_business_number_id", (q) => q.eq("businessNumberId", normalizedBusinessNumberId))
+      .first();
+    if (!row) return { updated: false as const };
+    await ctx.db.patch(row._id, {
+      businessAccountId: normalizedWabaId,
+      wabaValidationStatus: "unknown",
+      lastWabaValidationAt: Date.now(),
+      lastWabaValidationError: undefined,
+    });
+    return { updated: true as const, businessAccountId: normalizedWabaId };
+  },
+});
+
 export const getByBusinessNumberId = internalQuery({
   args: { businessNumberId: v.string() },
   handler: async (ctx, args) => {

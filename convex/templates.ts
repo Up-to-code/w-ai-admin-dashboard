@@ -97,6 +97,77 @@ async function withAppSecretProof(
   return next;
 }
 
+async function fetchWabaPhoneIdSet(
+  ctx: { runAction: (...args: any[]) => Promise<any> },
+  wabaId: string,
+  accessToken: string
+): Promise<Set<string>> {
+  const foundWabaPhoneIds = new Set<string>();
+  let nextUrl: URL | null = new URL(`https://graph.facebook.com/v21.0/${wabaId}/phone_numbers`);
+  nextUrl.searchParams.set("fields", "id");
+  nextUrl.searchParams.set("limit", "100");
+
+  while (nextUrl) {
+    const requestUrl = await withAppSecretProof(ctx, nextUrl, accessToken);
+    const response = await fetch(requestUrl.toString(), {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+    const body: any = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const errorMessage =
+        typeof body?.error?.message === "string"
+          ? body.error.message
+          : `HTTP ${response.status}`;
+      throw new Error(
+        `Failed to validate number/WABA binding for WABA ${wabaId}: ${errorMessage}`
+      );
+    }
+    const rows = Array.isArray(body?.data) ? body.data : [];
+    for (const row of rows) {
+      const id = normalizeNumericId(typeof row?.id === "string" ? row.id : String(row?.id ?? ""));
+      if (id) foundWabaPhoneIds.add(id);
+    }
+    const pagingNext = typeof body?.paging?.next === "string" ? body.paging.next : null;
+    nextUrl = pagingNext ? new URL(pagingNext) : null;
+  }
+
+  return foundWabaPhoneIds;
+}
+
+async function fetchAccessibleWabaIds(
+  ctx: { runAction: (...args: any[]) => Promise<any> },
+  accessToken: string
+): Promise<string[]> {
+  const ids = new Set<string>();
+  let nextUrl: URL | null = new URL("https://graph.facebook.com/v21.0/me/whatsapp_business_accounts");
+  nextUrl.searchParams.set("fields", "id");
+  nextUrl.searchParams.set("limit", "100");
+
+  while (nextUrl) {
+    const requestUrl = await withAppSecretProof(ctx, nextUrl, accessToken);
+    const response = await fetch(requestUrl.toString(), {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+    const body: any = await response.json().catch(() => ({}));
+    if (!response.ok) break;
+    const rows = Array.isArray(body?.data) ? body.data : [];
+    for (const row of rows) {
+      const id = normalizeNumericId(typeof row?.id === "string" ? row.id : String(row?.id ?? ""));
+      if (id) ids.add(id);
+    }
+    const pagingNext = typeof body?.paging?.next === "string" ? body.paging.next : null;
+    nextUrl = pagingNext ? new URL(pagingNext) : null;
+  }
+
+  return Array.from(ids);
+}
+
 export const list = query({
   args: { phoneNumberId: v.string() },
   handler: async (ctx, args) => {
@@ -700,62 +771,78 @@ export const syncFromMeta = action({
       throw new Error("Missing access token for this number. Reconnect token in Integrations and retry sync.");
     }
 
-    const foundWabaPhoneIds = new Set<string>();
-    let nextUrl: URL | null = new URL(`https://graph.facebook.com/v21.0/${configuredWabaId}/phone_numbers`);
-    nextUrl.searchParams.set("fields", "id");
-    nextUrl.searchParams.set("limit", "100");
-
-    while (nextUrl) {
-      const requestUrl = await withAppSecretProof(ctx, nextUrl, accessToken);
-      const response = await fetch(requestUrl.toString(), {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
+    const normalizedPhoneNumberId = normalizeNumericId(args.phoneNumberId);
+    let activeWabaId = configuredWabaId;
+    let foundWabaPhoneIds: Set<string>;
+    try {
+      foundWabaPhoneIds = await fetchWabaPhoneIdSet(ctx, configuredWabaId, accessToken);
+    } catch (error) {
+      await ctx.runMutation(internal.whatsappNumbers.clearWabaValidation, {
+        businessNumberId: args.phoneNumberId,
       });
-      const body: any = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const errorMessage =
-          typeof body?.error?.message === "string"
-            ? body.error.message
-            : `HTTP ${response.status}`;
-        await ctx.runMutation(internal.whatsappNumbers.clearWabaValidation, {
-          businessNumberId: args.phoneNumberId,
-        });
-        throw new Error(
-          `Failed to validate number/WABA binding for ${args.phoneNumberId}: ${errorMessage}`
-        );
-      }
-      const rows = Array.isArray(body?.data) ? body.data : [];
-      for (const row of rows) {
-        const id = normalizeNumericId(typeof row?.id === "string" ? row.id : String(row?.id ?? ""));
-        if (id) foundWabaPhoneIds.add(id);
-      }
-      const pagingNext = typeof body?.paging?.next === "string" ? body.paging.next : null;
-      nextUrl = pagingNext ? new URL(pagingNext) : null;
+      throw new Error(
+        `Failed to validate number/WABA binding for ${args.phoneNumberId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
 
-    if (!foundWabaPhoneIds.has(normalizeNumericId(args.phoneNumberId))) {
-      const mismatchError =
-        `[WABA_MISMATCH] Number ${args.phoneNumberId} is not a member of configured WABA ${configuredWabaId}. ` +
-        "Update Integrations mapping, then sync templates again.";
-      await ctx.runMutation(internal.whatsappNumbers.markWabaValidationMismatch, {
-        businessNumberId: args.phoneNumberId,
-        error: mismatchError,
-      });
-      throw new Error(mismatchError);
+    if (!foundWabaPhoneIds.has(normalizedPhoneNumberId)) {
+      const accessibleWabaIds = await fetchAccessibleWabaIds(ctx, accessToken);
+      const candidateWabaIds = Array.from(
+        new Set(
+          [
+            process.env.WHATSAPP_WABA_ID,
+            ...accessibleWabaIds,
+            ...numbers.map((row: any) => row.businessAccountId),
+          ]
+            .map((id) => normalizeNumericId(id))
+            .filter((id) => id.length > 0 && id !== configuredWabaId)
+        )
+      );
+      let rebound = false;
+      for (const candidateWabaId of candidateWabaIds) {
+        try {
+          const candidatePhoneIds = await fetchWabaPhoneIdSet(ctx, candidateWabaId, accessToken);
+          if (!candidatePhoneIds.has(normalizedPhoneNumberId)) continue;
+          await ctx.runMutation(internal.whatsappNumbers.rebindBusinessNumberToWaba, {
+            businessNumberId: args.phoneNumberId,
+            businessAccountId: candidateWabaId,
+          });
+          activeWabaId = candidateWabaId;
+          foundWabaPhoneIds = candidatePhoneIds;
+          rebound = true;
+          console.warn(
+            `[Templates] Auto-rebound number ${args.phoneNumberId} from WABA ${configuredWabaId} to ${candidateWabaId} after mismatch.`
+          );
+          break;
+        } catch {
+          // Ignore candidate failures and continue trying known WABA ids.
+        }
+      }
+
+      if (!rebound) {
+        const mismatchError =
+          `[WABA_MISMATCH] Number ${args.phoneNumberId} is not a member of configured WABA ${configuredWabaId}. ` +
+          "Update Integrations mapping, then sync templates again.";
+        await ctx.runMutation(internal.whatsappNumbers.markWabaValidationMismatch, {
+          businessNumberId: args.phoneNumberId,
+          error: mismatchError,
+        });
+        throw new Error(mismatchError);
+      }
     }
     await ctx.runMutation(internal.whatsappNumbers.markWabaValidationValid, {
       businessNumberId: args.phoneNumberId,
     });
 
-    if (selectedNumber?.businessAccountId) {
+    if (activeWabaId) {
       const sharingSameWaba = numbers.filter(
-        (row: any) => row.businessAccountId === selectedNumber.businessAccountId
+        (row: any) => normalizeNumericId(row.businessAccountId) === activeWabaId
       );
       if (sharingSameWaba.length > 1) {
         console.warn(
-          `[Templates] Number ${args.phoneNumberId} shares WABA ${selectedNumber.businessAccountId} with ${sharingSameWaba.length - 1} other number(s); Meta template lists can match across those numbers.`
+          `[Templates] Number ${args.phoneNumberId} shares WABA ${activeWabaId} with ${sharingSameWaba.length - 1} other number(s); Meta template lists can match across those numbers.`
         );
       }
     }

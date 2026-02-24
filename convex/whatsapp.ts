@@ -1304,24 +1304,32 @@ export const processWebhookAction = internalAction({
 export const testAccessToken = action({
   args: {
     phoneNumberId: v.optional(v.string()),
+    accessToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     try {
       const config = await getWhatsAppConfig(ctx, args.phoneNumberId ?? undefined);
+      const tokenToTest = normalizeToken(args.accessToken) ?? config.accessToken;
       const url = await withAppSecretProof(
         ctx,
         `${WHATSAPP_API_URL}/${config.phoneId}?fields=id,display_phone_number`,
-        config.accessToken
+        tokenToTest
       );
       const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${config.accessToken}` },
+        headers: { Authorization: `Bearer ${tokenToTest}` },
       });
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
         const code = data.error?.code ?? response.status;
         const msg = data.error?.message ?? data.error?.error_user_msg ?? response.statusText ?? "Unknown error";
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401 || response.status === 403 || code === 190) {
+          await markNumberAuthFailureSafe(
+            ctx,
+            args.phoneNumberId ?? config.phoneId,
+            Number(code) || 190,
+            String(msg)
+          );
           return {
             success: false,
             error: "Access token is invalid or expired. Update the token in Integrations or Webhook settings.",
@@ -1334,6 +1342,8 @@ export const testAccessToken = action({
           details: data,
         };
       }
+
+      await markNumberAuthHealthySafe(ctx, args.phoneNumberId ?? config.phoneId);
 
       return {
         success: true,

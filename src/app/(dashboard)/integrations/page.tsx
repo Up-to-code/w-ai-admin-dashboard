@@ -92,6 +92,21 @@ export default function IntegrationsPage() {
     const [tokenTestLoadingFor, setTokenTestLoadingFor] = useState<string | null>(null)
     const [tokenTestByNumber, setTokenTestByNumber] = useState<Record<string, { success: boolean; phoneId?: string; displayPhoneNumber?: string | null; error?: string; details?: unknown }>>({})
 
+    const mapMetaTokenErrorToArabic = (message: string): string => {
+        const value = String(message ?? "").trim()
+        const lower = value.toLowerCase()
+        if (
+            lower.includes("session has expired") ||
+            lower.includes("error validating access token") ||
+            lower.includes("invalid or expired access token") ||
+            lower.includes("(#190)") ||
+            lower.includes("oauth")
+        ) {
+            return "انتهت صلاحية Access Token لواتساب. حدّث التوكن من Meta في صفحة الإعدادات والربط ثم أعد المحاولة."
+        }
+        return value || "تعذر تنفيذ العملية حالياً."
+    }
+
     useEffect(() => {
         if (numbers.length === 0) {
             setAgentPhoneNumberId("")
@@ -274,6 +289,28 @@ export default function IntegrationsPage() {
         }
         setSyncingFromMeta(true)
         try {
+            // Preflight token check to avoid noisy action failures when token is expired.
+            const testTargetPhoneNumberId =
+                defaultPhoneNumberId ||
+                numbers.find((n) => Boolean(n.accessToken?.trim()))?.businessNumberId ||
+                undefined
+            const preflight = await testAccessToken({
+                phoneNumberId: testTargetPhoneNumberId,
+                accessToken: token,
+            })
+            if (!preflight.success) {
+                const raw =
+                    String((preflight as { error?: string }).error ?? "") +
+                    " " +
+                    String((preflight as { details?: unknown }).details ?? "")
+                setTokenTestResult({
+                    success: false,
+                    error: mapMetaTokenErrorToArabic(raw),
+                    details: (preflight as { details?: unknown }).details ?? null,
+                })
+                return
+            }
+
             const result = await syncNumbersFromMeta({
                 accessToken: token,
             })
@@ -284,7 +321,7 @@ export default function IntegrationsPage() {
             })
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err)
-            setTokenTestResult({ success: false, error: msg })
+            setTokenTestResult({ success: false, error: mapMetaTokenErrorToArabic(msg) })
         } finally {
             setSyncingFromMeta(false)
         }

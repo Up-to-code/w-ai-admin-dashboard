@@ -40,6 +40,23 @@ import { useOptionalConvexQuery } from "@/hooks/useOptionalConvexQuery"
 import { TemplatePreview } from "@/components/TemplatePreview"
 import { runConvexActionSafe } from "@/lib/convexActionSafe"
 
+function mapReadinessReasonToArabic(reason: string | null | undefined, fallbackMessage?: string): string {
+    switch (reason) {
+        case "NUMBER_NOT_FOUND":
+            return "الرقم غير موجود أو غير مهيأ. تحقق من إعدادات التكاملات ثم أعد المحاولة."
+        case "TOKEN_MISSING":
+            return "رمز الوصول مفقود لهذا الرقم. أضف Access Token من صفحة الإعدادات والربط."
+        case "AUTH_FAILED":
+            return "فشل التحقق من رمز الوصول لهذا الرقم. أعد ربط الرقم من صفحة الإعدادات والربط."
+        case "WABA_MISMATCH":
+            return "عدم تطابق بين رقم الإرسال وحساب WABA المهيأ. عدّل الربط في الإعدادات والربط ثم أعد مزامنة القوالب."
+        case "NO_SCOPED_TEMPLATES":
+            return "لا توجد قوالب معتمدة لهذا الرقم. قم بمزامنة القوالب ثم اختر قالباً معتمداً."
+        default:
+            return fallbackMessage || "الرقم غير جاهز حالياً لمزامنة القوالب."
+    }
+}
+
 export default function TemplatesPage() {
     const enableExtendedCampaignApis = process.env.NEXT_PUBLIC_EXTENDED_CAMPAIGN_APIS === "1"
     const { activePhoneNumberId } = useWorkspace()
@@ -72,7 +89,10 @@ export default function TemplatesPage() {
         readinessBlockingReason === "TOKEN_MISSING" ||
         readinessBlockingReason === "NUMBER_NOT_FOUND" ||
         readinessBlockingReason === "WABA_MISMATCH"
-    const readinessBlockingMessage = (sendReadiness?.recommendedAction as string | undefined) ?? null
+    const readinessBlockingMessage = mapReadinessReasonToArabic(
+        readinessBlockingReason,
+        sendReadiness?.recommendedAction as string | undefined
+    )
 
     const [search, setSearch] = useState("")
     const [activeTab, setActiveTab] = useState("all")

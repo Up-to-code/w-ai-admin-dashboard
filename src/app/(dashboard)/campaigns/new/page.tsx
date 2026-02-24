@@ -104,6 +104,40 @@ function mapResultReasonToArabic(reason: string): string {
     }
 }
 
+function mapReadinessReasonToArabic(
+    reason: string | null | undefined,
+    fallbackMessage?: string
+): string {
+    switch (reason) {
+        case "NUMBER_NOT_FOUND":
+            return "الرقم غير موجود أو غير مهيأ. تحقق من إعدادات التكاملات ثم أعد المحاولة."
+        case "TOKEN_MISSING":
+            return "رمز الوصول مفقود لهذا الرقم. أضف Access Token من صفحة الإعدادات والربط."
+        case "AUTH_FAILED":
+            return "فشل التحقق من رمز الوصول لهذا الرقم. أعد ربط الرقم من صفحة الإعدادات والربط."
+        case "WABA_MISMATCH":
+            return "عدم تطابق بين رقم الإرسال وحساب WABA المهيأ. عدّل الربط في الإعدادات والربط ثم أعد مزامنة القوالب."
+        case "NO_SCOPED_TEMPLATES":
+            return "لا توجد قوالب معتمدة لهذا الرقم. قم بمزامنة القوالب ثم اختر قالباً معتمداً."
+        default:
+            return fallbackMessage || "الرقم غير جاهز حالياً لإرسال القوالب."
+    }
+}
+
+function mapTemplateSyncErrorToArabic(message: string): string {
+    const value = String(message ?? "").trim()
+    if (!value) return "تعذر مزامنة القوالب."
+    const lower = value.toLowerCase()
+    if (
+        lower.includes("[waba_mismatch]") ||
+        lower.includes("mismatch between sending number and configured waba") ||
+        lower.includes("not a member of configured waba")
+    ) {
+        return "عدم تطابق بين رقم الإرسال وحساب WABA المهيأ. عدّل الربط في الإعدادات والربط ثم أعد مزامنة القوالب."
+    }
+    return value
+}
+
 export default function NewCampaignPage() {
     const enableExtendedCampaignApis = process.env.NEXT_PUBLIC_EXTENDED_CAMPAIGN_APIS === "1"
     const router = useRouter()
@@ -213,8 +247,10 @@ export default function NewCampaignPage() {
         readinessBlockingReason === "WABA_MISMATCH"
     const readinessBlockingMessage =
         isTemplateReadinessHardBlocked
-            ? (sendReadiness?.recommendedAction as string | undefined) ||
-              "Cannot sync/send templates for this number until sending readiness issues are resolved."
+            ? mapReadinessReasonToArabic(
+                readinessBlockingReason,
+                sendReadiness?.recommendedAction as string | undefined
+            )
             : null
     const optionalExtendedApisUnavailable =
         templateHealthQuery.unavailable ||
@@ -241,11 +277,11 @@ export default function NewCampaignPage() {
     const triggerScopedTemplateSync = useCallback(async (force: boolean = false) => {
         if (!selectedPhoneNumberId) return
         if (isTemplateReadinessHardBlocked) {
-            setTemplateSyncError(readinessBlockingMessage || "Cannot sync templates for this number until number auth/token setup is fixed.")
+            setTemplateSyncError(null)
             return
         }
         if (isTemplateAuthFailed) {
-            setTemplateSyncError("لا يمكن مزامنة القوالب لهذا الرقم حتى إعادة ربط Access Token من صفحة الإعدادات والربط.")
+            setTemplateSyncError(null)
             return
         }
         if (!force && !shouldSyncScopedTemplates(selectedPhoneNumberId)) return
@@ -260,7 +296,7 @@ export default function NewCampaignPage() {
                 setTemplateSyncError(
                     fallbackResult.unavailable
                         ? "دالة مزامنة القوالب غير متاحة على نسخة Convex الحالية. قم بنشر backend ثم أعد المحاولة."
-                        : (fallbackResult.message || "تعذر مزامنة القوالب.")
+                        : mapTemplateSyncErrorToArabic(fallbackResult.message || "تعذر مزامنة القوالب.")
                 )
                 return
             }
@@ -270,7 +306,7 @@ export default function NewCampaignPage() {
             markScopedTemplatesSynced(selectedPhoneNumberId)
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
-            setTemplateSyncError(message || "تعذر مزامنة القوالب.")
+            setTemplateSyncError(mapTemplateSyncErrorToArabic(message || "تعذر مزامنة القوالب."))
         } finally {
             setIsSyncingTemplates(false)
         }
@@ -1320,7 +1356,7 @@ export default function NewCampaignPage() {
                                         )}
                                         {templateSyncError && (
                                             <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-                                                تعذر مزامنة القوالب. حاول مرة أخرى. {templateSyncError}
+                                                {templateSyncError}
                                             </div>
                                         )}
                                         {templateSyncWarning && (
