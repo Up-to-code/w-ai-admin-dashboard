@@ -11,12 +11,10 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { Separator } from "@/components/ui/separator"
 import {
     ArrowRight,
     Users,
     MessageSquare,
-    Calendar as CalendarIcon,
     CheckCircle2,
     Clock,
     Tag,
@@ -45,6 +43,65 @@ import { toast } from "sonner"
 import { toUserSafeConvexMessage } from "@/lib/convexErrors"
 import { runConvexActionSafe } from "@/lib/convexActionSafe"
 
+type CampaignCreateResultRow = {
+    phoneNumberId: string
+    status: "created" | "skipped" | "failed"
+    campaignId?: string
+    reason?: string
+    downgradedTestMode?: boolean
+}
+
+type ScopedTemplateCandidate = {
+    _id: string
+    name: string
+    language?: string | null
+    phoneNumberId?: string | null
+    status?: string
+    lastSyncedAt?: number | null
+    _creationTime?: number
+}
+
+function normalizeTemplateLanguageCode(value: string | null | undefined): string {
+    return String(value ?? "").trim().toLowerCase().replace("-", "_")
+}
+
+function languageFamily(value: string | null | undefined): string {
+    const normalized = normalizeTemplateLanguageCode(value)
+    return normalized.split("_")[0] ?? ""
+}
+
+function templateRecency(template: ScopedTemplateCandidate): number {
+    return Number(template.lastSyncedAt ?? template._creationTime ?? 0)
+}
+
+function pickLatestTemplate(templates: ScopedTemplateCandidate[]): ScopedTemplateCandidate | null {
+    if (templates.length === 0) return null
+    return templates.slice().sort((a, b) => templateRecency(b) - templateRecency(a))[0] ?? null
+}
+
+function isMissingFunctionError(message: string): boolean {
+    return message.includes("Could not find public function")
+}
+
+function mapResultReasonToArabic(reason: string): string {
+    switch (reason) {
+        case "NUMBER_NOT_FOUND":
+            return "الرقم غير موجود أو غير مهيأ"
+        case "TOKEN_MISSING":
+            return "رمز الوصول مفقود لهذا الرقم"
+        case "AUTH_FAILED":
+            return "فشل المصادقة لهذا الرقم"
+        case "TEMPLATE_NOT_AVAILABLE_FOR_NUMBER":
+            return "القالب غير متاح لهذا الرقم"
+        case "CREATE_VALIDATION_ERROR":
+            return "فشل إنشاء الحملة بسبب تحقق الخادم"
+        case "CREATE_FAILED":
+            return "تعذر إنشاء الحملة"
+        default:
+            return reason
+    }
+}
+
 export default function NewCampaignPage() {
     const enableExtendedCampaignApis = process.env.NEXT_PUBLIC_EXTENDED_CAMPAIGN_APIS === "1"
     const router = useRouter()
@@ -56,6 +113,7 @@ export default function NewCampaignPage() {
     // Form Data
     const [name, setName] = useState("")
     const [selectedPhoneNumberId, setSelectedPhoneNumberId] = useState<string | null>(null)
+    const [createForAllNumbers, setCreateForAllNumbers] = useState(false)
     const [scheduledAt, setScheduledAt] = useState<string>("")
     const [recurrenceCronSpec, setRecurrenceCronSpec] = useState<string>("")
     const [selectedTemplate, setSelectedTemplate] = useState<{
@@ -169,11 +227,13 @@ export default function NewCampaignPage() {
         !templateSyncError &&
         !isSyncingTemplates
     const contentStepCanProceed =
-        apisUnavailableBypass ||
-        (!templateCriticalApisUnavailable &&
-            !!selectedTemplate &&
-            !isTemplateValidationLoading &&
-            !!templateValidation?.ok)
+        createForAllNumbers
+            ? !!selectedTemplate && !isSyncingTemplates
+            : apisUnavailableBypass ||
+              (!templateCriticalApisUnavailable &&
+                  !!selectedTemplate &&
+                  !isTemplateValidationLoading &&
+                  !!templateValidation?.ok)
 
     const triggerScopedTemplateSync = useCallback(async (force: boolean = false) => {
         if (!selectedPhoneNumberId) return
@@ -366,46 +426,271 @@ export default function NewCampaignPage() {
 
     const handleSubmit = async () => {
         if (testBypassValidationError || testContactOverflowWarning) return
-        if (!selectedPhoneNumberId || !selectedTemplate?._id) return
-        if (!apisUnavailableBypass && templateCriticalApisUnavailable) {
-            toast.error("لا يمكن إنشاء الحملة الآن لأن واجهات التحقق الأساسية غير متاحة على نسخة الخادم الحالية.")
-            return
-        }
-        if (isTemplateReadinessHardBlocked || isTemplateAuthFailed || !!templateSyncError) {
+        if (!selectedPhoneNumberId || !selectedTemplate?.name) return
+        if (!createForAllNumbers && (isTemplateReadinessHardBlocked || isTemplateAuthFailed || !!templateSyncError)) {
             toast.error("لا يمكن إنشاء الحملة قبل إصلاح حالة الرقم/القوالب لهذا الرقم.")
             return
         }
-        if (!apisUnavailableBypass && (isTemplateValidationLoading || !templateValidation?.ok)) {
+        if (!createForAllNumbers && !apisUnavailableBypass && (isTemplateValidationLoading || !templateValidation?.ok)) {
             toast.error("التحقق من القالب لم يكتمل أو فشل. أصلح المشكلة ثم أعد المحاولة.")
             return
         }
-        if (isTestCampaign && optionalExtendedApisUnavailable) {
-            toast.error("حملات الاختبار تتطلب نشر نسخة Convex المحدثة (npx convex deploy).")
-            return
-        }
+
         setIsSubmitting(true)
-        const payload: Record<string, unknown> = {
-            name,
-            templateId: selectedTemplate?._id,
-            templateName: selectedTemplate?.name || "",
-            phoneNumberId: selectedPhoneNumberId ?? undefined,
-            targetTags: targetAudience === 'tags' ? selectedTags : undefined,
-            targetContactIds: targetAudience === 'selected' && selectedContactIds.length > 0 ? selectedContactIds : undefined,
-            scheduledAt: scheduledAt ? new Date(scheduledAt).getTime() : Date.now(),
-            recurrenceCronSpec: recurrenceCronSpec || undefined,
-            sendingConfig
-        }
-        if (!optionalExtendedApisUnavailable) {
-            if (selectedTemplate?.language) payload.templateLanguage = selectedTemplate.language
-            if (isTestCampaign) {
-                payload.isTestCampaign = true
-                payload.testBypassRecentContact = testBypassRecentContact
-                if (normalizedTestPhones.length > 0) payload.testContactPhones = normalizedTestPhones
-            }
-        }
+
         try {
-            await createCampaign(payload)
-            router.push("/campaigns?success=true")
+            const numberById = new Map(numbers.map((number) => [number.businessNumberId, number]))
+            const rawTargetIds = createForAllNumbers
+                ? numbers.map((number) => number.businessNumberId)
+                : [selectedPhoneNumberId]
+            const targetPhoneNumberIds = Array.from(
+                new Set(rawTargetIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0))
+            )
+
+            if (targetPhoneNumberIds.length === 0) {
+                toast.error("لا يوجد رقم إرسال صالح لإنشاء الحملة.")
+                return
+            }
+
+            const requestedTemplateLanguage = selectedTemplate.language ?? undefined
+            const requestedTemplateLanguageNormalized = normalizeTemplateLanguageCode(requestedTemplateLanguage)
+            const scheduledAtMs = scheduledAt ? new Date(scheduledAt).getTime() : Date.now()
+            const targetTagsValue = targetAudience === "tags" ? selectedTags : undefined
+            const targetContactIdsValue =
+                targetAudience === "selected" && selectedContactIds.length > 0 ? selectedContactIds : undefined
+            const includeTestFields = isTestCampaign && !optionalExtendedApisUnavailable
+            const downgradeTestMode = isTestCampaign && !includeTestFields
+            const results: CampaignCreateResultRow[] = []
+
+            for (const phoneNumberId of targetPhoneNumberIds) {
+                if (!numberById.has(phoneNumberId)) {
+                    results.push({
+                        phoneNumberId,
+                        status: "skipped",
+                        reason: "NUMBER_NOT_FOUND",
+                        downgradedTestMode: downgradeTestMode,
+                    })
+                    continue
+                }
+
+                try {
+                    const readiness = await convex.query((api as any).campaigns.getSendReadiness, { phoneNumberId })
+                    const blockingReason = String(readiness?.blockingReason ?? "")
+                    const tokenStatus = String(readiness?.tokenStatus ?? "")
+                    if (blockingReason === "NUMBER_NOT_FOUND" || blockingReason === "MISSING_NUMBER") {
+                        results.push({
+                            phoneNumberId,
+                            status: "skipped",
+                            reason: "NUMBER_NOT_FOUND",
+                            downgradedTestMode: downgradeTestMode,
+                        })
+                        continue
+                    }
+                    if (blockingReason === "TOKEN_MISSING" || tokenStatus === "missing") {
+                        results.push({
+                            phoneNumberId,
+                            status: "skipped",
+                            reason: "TOKEN_MISSING",
+                            downgradedTestMode: downgradeTestMode,
+                        })
+                        continue
+                    }
+                    if (blockingReason === "AUTH_FAILED" || blockingReason === "AUTH_BLOCKED" || tokenStatus === "auth_failed") {
+                        results.push({
+                            phoneNumberId,
+                            status: "skipped",
+                            reason: "AUTH_FAILED",
+                            downgradedTestMode: downgradeTestMode,
+                        })
+                        continue
+                    }
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error)
+                    if (!isMissingFunctionError(message)) {
+                        console.warn("[CampaignCreate] getSendReadiness failed", { phoneNumberId, message })
+                    }
+                }
+
+                let resolvedTemplate: ScopedTemplateCandidate | null = null
+                try {
+                    const validation = await convex.query((api as any).campaigns.validateTemplateSelection, {
+                        templateName: selectedTemplate.name,
+                        phoneNumberId,
+                        requestedLanguage: requestedTemplateLanguage,
+                    })
+                    if (validation?.ok && validation?.templateId) {
+                        resolvedTemplate = {
+                            _id: String(validation.templateId),
+                            name: String(validation.name ?? selectedTemplate.name),
+                            language: validation.language ?? requestedTemplateLanguage ?? undefined,
+                            phoneNumberId,
+                            status: "APPROVED",
+                        }
+                    }
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error)
+                    if (!isMissingFunctionError(message)) {
+                        console.warn("[CampaignCreate] validateTemplateSelection failed", { phoneNumberId, message })
+                    }
+                }
+
+                if (!resolvedTemplate) {
+                    try {
+                        const byName = await convex.query((api as any).templates.getByName, {
+                            name: selectedTemplate.name,
+                            phoneNumberId,
+                        })
+                        if (byName && String(byName.status ?? "APPROVED").toUpperCase() === "APPROVED") {
+                            const byNameLanguage = normalizeTemplateLanguageCode(byName.language)
+                            if (
+                                !requestedTemplateLanguageNormalized ||
+                                byNameLanguage === requestedTemplateLanguageNormalized
+                            ) {
+                                resolvedTemplate = {
+                                    _id: String(byName._id),
+                                    name: String(byName.name ?? selectedTemplate.name),
+                                    language: byName.language ?? requestedTemplateLanguage ?? undefined,
+                                    phoneNumberId,
+                                    status: "APPROVED",
+                                    lastSyncedAt: byName.lastSyncedAt,
+                                    _creationTime: byName._creationTime,
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error)
+                        console.warn("[CampaignCreate] templates.getByName failed", { phoneNumberId, message })
+                    }
+                }
+
+                if (!resolvedTemplate) {
+                    try {
+                        const rows = (await convex.query((api as any).templates.list, { phoneNumberId })) as ScopedTemplateCandidate[]
+                        const sameNameApproved = rows.filter((row) => {
+                            return (
+                                row?.name === selectedTemplate.name &&
+                                String(row?.status ?? "").toUpperCase() === "APPROVED"
+                            )
+                        })
+                        if (sameNameApproved.length > 0) {
+                            const exactLanguage = requestedTemplateLanguageNormalized
+                                ? pickLatestTemplate(
+                                      sameNameApproved.filter(
+                                          (row) => normalizeTemplateLanguageCode(row.language) === requestedTemplateLanguageNormalized
+                                      )
+                                  )
+                                : null
+                            const familyLanguage =
+                                !exactLanguage && requestedTemplateLanguageNormalized
+                                    ? pickLatestTemplate(
+                                          sameNameApproved.filter((row) => {
+                                              return (
+                                                  languageFamily(row.language) ===
+                                                  languageFamily(requestedTemplateLanguageNormalized)
+                                              )
+                                          })
+                                      )
+                                    : null
+                            resolvedTemplate = exactLanguage ?? familyLanguage ?? pickLatestTemplate(sameNameApproved)
+                        }
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error)
+                        console.warn("[CampaignCreate] templates.list failed", { phoneNumberId, message })
+                    }
+                }
+
+                if (!resolvedTemplate) {
+                    results.push({
+                        phoneNumberId,
+                        status: "skipped",
+                        reason: "TEMPLATE_NOT_AVAILABLE_FOR_NUMBER",
+                        downgradedTestMode: downgradeTestMode,
+                    })
+                    continue
+                }
+
+                const payload: Record<string, unknown> = {
+                    name,
+                    templateId: resolvedTemplate._id,
+                    templateName: selectedTemplate.name,
+                    templateLanguage: resolvedTemplate.language ?? requestedTemplateLanguage ?? undefined,
+                    phoneNumberId,
+                    targetTags: targetTagsValue,
+                    targetContactIds: targetContactIdsValue,
+                    scheduledAt: scheduledAtMs,
+                    recurrenceCronSpec: recurrenceCronSpec || undefined,
+                    sendingConfig,
+                }
+                if (includeTestFields) {
+                    payload.isTestCampaign = true
+                    payload.testBypassRecentContact = testBypassRecentContact
+                    if (normalizedTestPhones.length > 0) payload.testContactPhones = normalizedTestPhones
+                }
+
+                try {
+                    const createdCampaignId = await createCampaign(payload)
+                    results.push({
+                        phoneNumberId,
+                        status: "created",
+                        campaignId: String(createdCampaignId),
+                        downgradedTestMode: downgradeTestMode,
+                    })
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error)
+                    const isValidationError =
+                        message.includes("Template") ||
+                        message.includes("validation") ||
+                        message.includes("not approved")
+                    results.push({
+                        phoneNumberId,
+                        status: "failed",
+                        reason: isValidationError ? "CREATE_VALIDATION_ERROR" : "CREATE_FAILED",
+                        downgradedTestMode: downgradeTestMode,
+                    })
+                }
+            }
+
+            if (process.env.NODE_ENV !== "production") {
+                console.debug("[CampaignCreate] per-number results", results)
+            }
+
+            const createdCount = results.filter((row) => row.status === "created").length
+            const skippedCount = results.filter((row) => row.status === "skipped").length
+            const failedCount = results.filter((row) => row.status === "failed").length
+            const downgradedCount = results.filter((row) => row.status === "created" && row.downgradedTestMode).length
+            const totalCount = results.length
+
+            if (createdCount > 0) {
+                toast.success(
+                    `تم إنشاء ${createdCount} حملة من أصل ${totalCount}.${skippedCount > 0 ? ` تم التخطي: ${skippedCount}.` : ""}${failedCount > 0 ? ` فشل: ${failedCount}.` : ""}`
+                )
+            } else {
+                toast.error(`تعذر إنشاء أي حملة. تمت معالجة ${totalCount} رقم بدون نجاح.`)
+            }
+
+            if (downgradedCount > 0) {
+                toast.warning(
+                    `تم إنشاء الحملات كحملات عادية بدون إعدادات الاختبار المتقدمة لعدد ${downgradedCount} رقم بسبب عدم توفر الواجهات الاختيارية.`
+                )
+            }
+
+            const skippedReasons = results
+                .filter((row) => row.status !== "created" && row.reason)
+                .reduce<Record<string, number>>((acc, row) => {
+                    const reason = row.reason as string
+                    acc[reason] = (acc[reason] ?? 0) + 1
+                    return acc
+                }, {})
+            const skippedReasonItems = Object.entries(skippedReasons)
+                .map(([reason, count]) => `${mapResultReasonToArabic(reason)} (${count})`)
+                .join("، ")
+            if (skippedReasonItems) {
+                toast.warning(`تفاصيل الأرقام غير المكتملة: ${skippedReasonItems}`)
+            }
+
+            if (createdCount > 0 && skippedCount === 0 && failedCount === 0) {
+                router.push("/campaigns?success=true")
+            }
         } catch (error) {
             console.error("Failed to create campaign:", error)
             toast.error(
@@ -541,6 +826,26 @@ export default function NewCampaignPage() {
                                             <p className="text-xs text-muted-foreground">سيتم إرسال رسائل الحملة من هذا الرقم</p>
                                         </div>
                                     )}
+                                    <div className="rounded-lg border p-4 bg-muted/20 space-y-2">
+                                        <div className="flex items-center justify-between gap-4">
+                                            <div>
+                                                <p className="font-medium">إنشاء حملة لكل أرقام الإرسال</p>
+                                                <p className="text-xs text-muted-foreground">
+                                                    سيتم إنشاء حملة منفصلة لكل رقم إرسال مهيأ في مساحة العمل.
+                                                </p>
+                                            </div>
+                                            <Switch
+                                                checked={createForAllNumbers}
+                                                onCheckedChange={setCreateForAllNumbers}
+                                                disabled={numbers.length === 0}
+                                            />
+                                        </div>
+                                        {createForAllNumbers && (
+                                            <p className="text-xs text-blue-700 dark:text-blue-300">
+                                                وضع متعدد الأرقام مفعل: سيتم إنشاء حملة لكل رقم صالح مع تخطي الأرقام غير الجاهزة.
+                                            </p>
+                                        )}
+                                    </div>
                                     
                                     <SchedulePicker
                                         value={scheduledAt}
@@ -1162,6 +1467,11 @@ export default function NewCampaignPage() {
                                                             {numbers.find((n) => n.businessNumberId === selectedPhoneNumberId)?.name ?? selectedPhoneNumberId ?? "افتراضي"}
                                                         </span>
                                                     </div>
+                                                    <p className="text-sm text-muted-foreground mt-1">
+                                                        {createForAllNumbers
+                                                            ? `سيتم الإنشاء لكل الأرقام (${numbers.length})`
+                                                            : "سيتم الإنشاء لهذا الرقم فقط"}
+                                                    </p>
                                                 </div>
                                             )}
                                             {isAdmin && isTestCampaign && (
@@ -1254,9 +1564,9 @@ export default function NewCampaignPage() {
                                                 (
                                                     !selectedPhoneNumberId ||
                                                     !contentStepCanProceed ||
-                                                    !!templateSyncError ||
-                                                    isTemplateReadinessHardBlocked ||
-                                                    isTemplateAuthFailed
+                                                    (!createForAllNumbers && !!templateSyncError) ||
+                                                    (!createForAllNumbers && isTemplateReadinessHardBlocked) ||
+                                                    (!createForAllNumbers && isTemplateAuthFailed)
                                                 ))
                                         }
                                         className="px-8 gap-2"
@@ -1272,12 +1582,18 @@ export default function NewCampaignPage() {
                                             !!testBypassValidationError ||
                                             !!testContactOverflowWarning ||
                                             !contentStepCanProceed ||
-                                            isTemplateReadinessHardBlocked ||
-                                            isTemplateAuthFailed ||
-                                            !!templateSyncError
+                                            (!createForAllNumbers && isTemplateReadinessHardBlocked) ||
+                                            (!createForAllNumbers && isTemplateAuthFailed) ||
+                                            (!createForAllNumbers && !!templateSyncError)
                                         }
                                     >
-                                        {isSubmitting ? "جاري الإنشاء..." : scheduledAt ? "تأكيد الجدولة" : "إرسال الحملة"}
+                                        {isSubmitting
+                                            ? "جاري الإنشاء..."
+                                            : createForAllNumbers
+                                              ? "إنشاء الحملات"
+                                              : scheduledAt
+                                                ? "تأكيد الجدولة"
+                                                : "إرسال الحملة"}
                                         {!isSubmitting && <CheckCircle2 className="h-4 w-4" />}
                                     </Button>
                                 )}
