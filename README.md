@@ -59,3 +59,7 @@ If you see access errors, run `npx convex dev` and select a deployment your acco
 - `src/app/` – Next.js pages (dashboard, campaigns, chat, customers, products, templates, etc.)
 - `src/components/` – UI components
 - `src/mock/` – Convex API layer (namespace routing)
+
+## Project links
+
+[Source](https://github.com/Up-to-code/w-ai-admin-dashboard) · [Issues](https://github.com/Up-to-code/w-ai-admin-dashboard/issues) · [Public project directory](https://github.com/qentrah/.github/blob/main/profile/PROJECTS.md)
